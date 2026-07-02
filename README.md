@@ -269,7 +269,7 @@ $test-fixer fix the failing CI tests
 !codex send $test-fixer fix the failing CI tests
 ```
 
-In channels where the bot is present and send mode is on, every normal message is treated as Codex input without `!codex send`. The default send policy is `immediate`, so that input is sent to Codex right away. Set `send-policy confirm` to show buttons for Run now, Keep queued, or Cancel, or set `send-policy pending` to queue all runnable input. When send mode is off, use `/codex send ...`, `!codex send ...`, or an app mention instead.
+In channels where the bot is present and send mode is on, every normal message is treated as Codex input without `!codex send`. The global default send policy is `immediate`, so unbound input is sent to Codex right away. Whenever a session is newly linked or created, the bridge sets that session to `pending` for safety and asks whether to switch to `immediate` or `confirm`. When send mode is off, use `/codex send ...`, `!codex send ...`, or an app mention instead.
 
 To browse local skills from Slack, send `$` or a prefix lookup:
 
@@ -635,7 +635,7 @@ Bind the current channel or thread to a recent Codex session:
 /codex unbind-session
 ```
 
-Without an argument, `bind-session` shows a recent-session picker. `/codex s` exposes the same picker behind `Bind recent` and also includes `New session`, `Unbind`, and `Send mode on/off`. After binding, normal channel messages continue that Codex session only when send mode is on. `send`, `$skill ...`, and the configured prefix remain explicit controls.
+Without an argument, `bind-session` shows a recent-session picker. `/codex s` exposes the same picker behind `Bind recent` and also includes `New session`, `Unbind`, and `Send mode on/off`. After binding, the session send policy is set to `pending` and the bot posts buttons asking whether to change it. Normal channel messages continue that Codex session only when send mode is on. `send`, `$skill ...`, and the configured prefix remain explicit controls.
 
 Explore recent sessions:
 

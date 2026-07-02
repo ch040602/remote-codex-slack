@@ -55,7 +55,7 @@ Usage hint: s | send-mode on|off | send-policy immediate|confirm|pending | ? | $
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
 
-After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` only while send mode is on. Send mode defaults to on for backward compatibility, and you can turn it off with `/codex send-mode off` or the `/codex s` button menu. The default send policy is `immediate`; use `send-policy confirm` for Run now / Keep queued / Cancel buttons, or `send-policy pending` to queue all runnable input. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
+After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` only while send mode is on. Send mode defaults to on for backward compatibility, and you can turn it off with `/codex send-mode off` or the `/codex s` button menu. The global default send policy is `immediate`, but newly linked sessions are set to `pending` for safety and the bot asks whether to change it. Use `send-policy confirm` for Run now / Keep queued / Cancel buttons, or `send-policy pending` to queue all runnable input. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
 
 For the simplest session workflow, use:
 
@@ -183,7 +183,7 @@ To bind the current channel or thread to a recent session:
 /codex unbind-session
 ```
 
-Without an argument, `bind-session` shows a picker. `/codex s` gives the same picker behind the `Bind recent` button and also provides `New session`, `Unbind`, and `Send mode on/off`. After binding, normal channel messages continue that Codex session only when send mode is on. `send`, `$skill ...`, or prefixed messages remain explicit controls.
+Without an argument, `bind-session` shows a picker. `/codex s` gives the same picker behind the `Bind recent` button and also provides `New session`, `Unbind`, and `Send mode on/off`. After binding, the session starts in `pending` mode and the bot asks whether to switch policy. Normal channel messages continue that Codex session only when send mode is on. `send`, `$skill ...`, or prefixed messages remain explicit controls.
 
 `recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 
@@ -214,7 +214,7 @@ Command explanations are English by default. To switch a channel or thread to Ko
 /codex language ko
 ```
 
-Codex execution commands use `send-policy immediate` by default. Switch modes per channel or thread:
+Codex execution commands use `send-policy immediate` by default before a session is linked. Newly linked sessions start with `send-policy pending` and show buttons to switch modes. You can also switch modes per channel or thread:
 
 ```text
 /codex send-policy immediate
