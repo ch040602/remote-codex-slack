@@ -25,5 +25,24 @@ describe("Store pending commands", () => {
     expect(store.removePendingCommand(pending.id)?.prompt).toBe("fix lint");
     expect(store.listPendingCommands("channel:C1")).toEqual([]);
   });
-});
 
+  it("records session command history by Slack key and Codex thread ID", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-slack-store-history-"));
+    const store = new Store(path.join(dir, "state.json"));
+    store.load();
+
+    store.addSessionCommand({
+      slackKey: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      codexThreadId: "019f20cf-7b8a-7c52-b037-d90afad6fd44",
+      command: "send",
+      prompt: "fix tests",
+      cwd: "C:/repo",
+      createdBy: "U1"
+    });
+
+    expect(store.listSessionCommands({ key: "C1:1.0" }).map((command) => command.prompt)).toEqual(["fix tests"]);
+    expect(store.listSessionCommands({ key: "other", codexThreadId: "019f20cf-7b8a-7c52-b037-d90afad6fd44" }).map((command) => command.prompt)).toEqual(["fix tests"]);
+  });
+});

@@ -24,6 +24,7 @@ export interface SlackThreadBinding {
   status: SessionStatus;
   lastPrompt?: string;
   lastFinalAnswer?: string;
+  sessionCommands?: Array<{ timestamp: string; prompt: string }>;
   title?: string;
   language?: LanguageCode;
   updatedAt: string;
@@ -48,18 +49,34 @@ export interface PendingCommand {
   createdBy: string;
 }
 
+export interface SessionCommandRecord {
+  id: string;
+  slackKey: string;
+  channelId: string;
+  threadTs?: string;
+  codexThreadId?: string;
+  command: PendingCommandKind;
+  prompt: string;
+  cwd: string;
+  projectName?: string;
+  createdAt: string;
+  createdBy: string;
+}
+
 export interface StateShape {
   channelBindings: Record<string, ChannelBinding>;
   threadBindings: Record<string, SlackThreadBinding>;
   codexThreadToSlackKey: Record<string, string>;
   pendingCommands: Record<string, PendingCommand>;
+  commandHistory: Record<string, SessionCommandRecord>;
 }
 
 const EMPTY: StateShape = {
   channelBindings: {},
   threadBindings: {},
   codexThreadToSlackKey: {},
-  pendingCommands: {}
+  pendingCommands: {},
+  commandHistory: {}
 };
 
 export class Store {
@@ -78,7 +95,8 @@ export class Store {
       channelBindings: loaded.channelBindings ?? {},
       threadBindings: loaded.threadBindings ?? {},
       codexThreadToSlackKey: loaded.codexThreadToSlackKey ?? {},
-      pendingCommands: loaded.pendingCommands ?? {}
+      pendingCommands: loaded.pendingCommands ?? {},
+      commandHistory: loaded.commandHistory ?? {}
     };
   }
 
@@ -177,5 +195,19 @@ export class Store {
     delete this.state.pendingCommands[id];
     this.save();
     return current;
+  }
+
+  addSessionCommand(command: Omit<SessionCommandRecord, "id" | "createdAt">): SessionCommandRecord {
+    const id = `h_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const saved: SessionCommandRecord = { ...command, id, createdAt: new Date().toISOString() };
+    this.state.commandHistory[id] = saved;
+    this.save();
+    return saved;
+  }
+
+  listSessionCommands(binding: Pick<SlackThreadBinding, "key" | "codexThreadId">): SessionCommandRecord[] {
+    return Object.values(this.state.commandHistory)
+      .filter((command) => command.slackKey === binding.key || Boolean(binding.codexThreadId && command.codexThreadId === binding.codexThreadId))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 }

@@ -4,9 +4,9 @@ import fs from "node:fs";
 import { resolveUserPath } from "../config.js";
 import type { BridgeConfig, SkillDef } from "../config.js";
 import type { PathResolver, ResolvedWorkspace } from "../core/pathResolver.js";
-import type { LanguageCode, PendingCommand, Store, SlackThreadBinding } from "../core/store.js";
+import type { LanguageCode, PendingCommand, SessionCommandRecord, Store, SlackThreadBinding } from "../core/store.js";
 import type { SkillRegistry } from "../core/skills.js";
-import { listCodexCliSessions } from "../codex/sessionIndex.js";
+import { listCodexCliSessions, type CodexCliSessionCommand } from "../codex/sessionIndex.js";
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
@@ -34,7 +34,7 @@ interface AssistActionValue {
   token?: string;
 }
 
-const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "pending", "status"]);
+const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status"]);
 
 export class SlackBridge {
   readonly app: App;
@@ -198,6 +198,15 @@ export class SlackBridge {
         case "recent":
         case "sessions":
           await this.handleSessions(ctx, parsed);
+          return;
+        case "active":
+          await this.handleActiveSessions(ctx, parsed);
+          return;
+        case "history":
+          await this.handleHistory(ctx, parsed);
+          return;
+        case "rerun-command":
+          await this.handleRerunCommand(ctx, parsed);
           return;
         case "pending":
           await this.handlePending(ctx);
@@ -406,6 +415,7 @@ export class SlackBridge {
       title: prompt.slice(0, 80)
     });
     const { turnId, referencedSkills } = await this.codex.startTurn(binding, prompt);
+    this.recordSessionCommand(ctx, binding, "new", prompt);
     await this.postThread(ctx.client, threadContext.channelId, threadContext.threadTs, [
       `Started Codex turn ${codeInline(turnId)} in ${codeInline(workspace.cwd)}.`,
       referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
@@ -448,6 +458,7 @@ export class SlackBridge {
       });
     }
     const { turnId, referencedSkills } = await this.codex.sendOrSteer(binding, prompt);
+    this.recordSessionCommand(ctx, binding, "send", prompt);
     await this.postThread(ctx.client, binding.channelId, binding.threadTs, [
       `Sent to Codex turn ${codeInline(turnId)}.`,
       referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
@@ -498,6 +509,7 @@ export class SlackBridge {
     const prompt = cmd.args.slice(1).join(" ").trim();
     if (prompt) {
       const { turnId, referencedSkills } = await this.codex.startTurn(binding, prompt);
+      this.recordSessionCommand(ctx, binding, "send", prompt);
       await this.postThread(ctx.client, binding.channelId, binding.threadTs, [
         `Resumed ${codeInline(codexThreadId)} and started turn ${codeInline(turnId)}.`,
         referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
@@ -567,6 +579,7 @@ export class SlackBridge {
       createdBy: ctx.userId
     });
     const { turnId, referencedSkills } = await this.codex.startTurn(resumed, prompt);
+    this.recordSessionCommand(ctx, resumed, "rerun", prompt);
     await this.postThread(ctx.client, target.channelId, target.threadTs, [
       `Rerun started as turn ${codeInline(turnId)}${selectorLabel ? ` from ${codeInline(selectorLabel)}` : ""}.`,
       `cwd: ${codeInline(target.cwd)}`,
@@ -596,6 +609,78 @@ export class SlackBridge {
       "",
       language === "ko" ? "재실행: `rerun-session <number|codexThreadId|last> [prompt]`" : "Rerun: `rerun-session <number|codexThreadId|last> [prompt]`"
     ].join("\n"));
+  }
+
+  private async handleActiveSessions(ctx: CommandContext, cmd: ParsedCommand) {
+    const active = this.listRecentSessions(50).filter((session) => session.status === "active" && session.key.startsWith("codex-cli:"));
+    if (active.length === 0) {
+      await this.reply(ctx, this.currentLanguage(ctx) === "ko" ? "실행 중인 Codex CLI 세션이 없습니다." : "No active Codex CLI sessions found.");
+      return;
+    }
+    const newChannelName = optionString(cmd, "channel");
+    if (newChannelName) {
+      await this.createChannelFromRecent(ctx, cmd, newChannelName, active);
+      return;
+    }
+    const language = this.currentLanguage(ctx);
+    await this.reply(ctx, [
+      language === "ko" ? "실행 중인 세션:" : "Active sessions:",
+      ...active.slice(0, 15).map((session, index) => renderRecentSession(session, index)),
+      "",
+      language === "ko"
+        ? "채널 연결: `active --channel <name> <number>`"
+        : "Create/link channel: `active --channel <name> <number>`"
+    ].join("\n"));
+  }
+
+  private async handleHistory(ctx: CommandContext, cmd: ParsedCommand) {
+    const selector = cmd.args[0];
+    const binding = selector
+      ? this.resolveRecentSession(ctx, selector, false)
+      : this.currentThreadBinding(ctx) ?? this.store.findLatestForChannel(ctx.channelId) ?? this.resolveRecentSession(ctx, "last", false);
+    if (!binding?.codexThreadId) throw new Error("No session found. Use `recent` first.");
+    const history = this.sessionCommandHistory(binding);
+    const language = this.currentLanguage(ctx);
+    if (history.length === 0) {
+      await this.reply(ctx, language === "ko" ? "이 세션에 기록된 명령이 없습니다." : "No recorded commands for this session.");
+      return;
+    }
+    await this.reply(ctx, [
+      language === "ko" ? `세션 명령 이력: ${codeInline(binding.codexThreadId)}` : `Session command history: ${codeInline(binding.codexThreadId)}`,
+      ...history.map((item, index) => renderSessionCommand(item, index)),
+      "",
+      language === "ko"
+        ? "재실행: `rerun-command <command-number> [session]`"
+        : "Rerun: `rerun-command <command-number> [session]`"
+    ].join("\n"));
+  }
+
+  private async handleRerunCommand(ctx: CommandContext, cmd: ParsedCommand) {
+    const commandSelector = cmd.args[0];
+    if (!commandSelector) {
+      await this.reply(ctx, "Usage: `rerun-command <command-number> [session]`");
+      return;
+    }
+    const sessionSelector = cmd.args[1];
+    const binding = sessionSelector
+      ? this.resolveRecentSession(ctx, sessionSelector, false)
+      : this.currentThreadBinding(ctx) ?? this.store.findLatestForChannel(ctx.channelId) ?? this.resolveRecentSession(ctx, "last", false);
+    if (!binding?.codexThreadId) throw new Error("No session found. Use `recent` first.");
+    const history = this.sessionCommandHistory(binding);
+    const selected = /^\d+$/.test(commandSelector) ? history[Number(commandSelector) - 1] : undefined;
+    if (!selected) throw new Error(`No command found for selector: ${commandSelector}`);
+    if (await this.replyIfUnknownSkills(ctx, selected.prompt)) return;
+
+    if (!isForce(cmd)) {
+      await this.enqueuePending(ctx, {
+        command: "rerun-session",
+        prompt: selected.prompt,
+        selector: sessionSelector ?? binding.codexThreadId
+      });
+      return;
+    }
+
+    await this.startRerun(ctx, binding, selected.prompt, `${sessionSelector ?? "current"}:${commandSelector}`);
   }
 
   private async handleStatus(ctx: CommandContext) {
@@ -707,6 +792,26 @@ export class SlackBridge {
       `Edit: ${codeInline(`pending-edit ${this.store.listPendingCommands(saved.scopeKey).length} <new prompt>`)}`,
       `Force immediate execution next time with ${codeInline("-f")} or ${codeInline("--force")}.`
     ].join("\n"));
+  }
+
+  private recordSessionCommand(ctx: CommandContext, binding: SlackThreadBinding, command: PendingCommand["command"], prompt: string) {
+    this.store.addSessionCommand({
+      slackKey: binding.key,
+      channelId: binding.channelId,
+      threadTs: binding.threadTs,
+      codexThreadId: binding.codexThreadId,
+      command,
+      prompt,
+      cwd: binding.cwd,
+      projectName: binding.projectName,
+      createdBy: ctx.userId
+    });
+  }
+
+  private sessionCommandHistory(binding: SlackThreadBinding): Array<SessionCommandRecord | CodexCliSessionCommand> {
+    const stored = this.store.listSessionCommands(binding);
+    if (stored.length > 0) return stored;
+    return binding.sessionCommands ?? (binding.lastPrompt ? [{ timestamp: binding.updatedAt, prompt: binding.lastPrompt }] : []);
   }
 
   private resolvePending(ctx: CommandContext, selector: string): PendingCommand {
@@ -874,6 +979,7 @@ export class SlackBridge {
           status: session.status,
           lastPrompt: session.lastPrompt,
           lastFinalAnswer: session.lastFinalAnswer,
+          sessionCommands: session.commands,
           title: session.title,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
@@ -937,6 +1043,7 @@ export class SlackBridge {
         status: session.status,
         lastPrompt: session.lastPrompt,
         lastFinalAnswer: session.lastFinalAnswer,
+        sessionCommands: session.sessionCommands,
         title: session.title,
         language: this.currentLanguage(ctx),
         createdAt: new Date().toISOString(),
@@ -1313,6 +1420,15 @@ function renderRecentSession(session: SlackThreadBinding, index: number): string
     .join("\n");
 }
 
+function renderSessionCommand(command: SessionCommandRecord | CodexCliSessionCommand, index: number): string {
+  const kind = "command" in command ? ` ${codeInline(command.command)}` : "";
+  const timestamp = "createdAt" in command ? command.createdAt : command.timestamp;
+  return [
+    `${index + 1}. ${codeInline(timestamp)}${kind}`,
+    `   prompt: ${preview(command.prompt, 500)}`
+  ].join("\n");
+}
+
 function renderPendingCommands(commands: PendingCommand[], language: LanguageCode): string {
   const header = language === "ko" ? "대기 중인 명령:" : "Pending commands:";
   return [
@@ -1353,95 +1469,40 @@ function normalizeLanguage(value: string | undefined): LanguageCode | undefined 
 
 function helpText(prefix: string, language: LanguageCode): string {
   if (language === "ko") {
-    return codeBlock(`명령어:
-  help
-  commands [prefix]               명령어 추천을 봅니다. 예: commands pend
-  ?                                자주 쓰는 명령어를 추천합니다.
-  language en|ko                 봇 안내 언어를 영어/한국어로 변경합니다.
-  projects
-  skills [prefix]                 등록된 skill을 봅니다. 예: skills rev
-  $ 또는 $prefix                   등록된 skill 목록/검색 결과를 봅니다.
-  pwd
-  ls [path]                       현재 작업공간 파일/폴더를 봅니다.
-  use <project|path>              현재 thread 작업공간을 설정합니다. thread가 아니면 channel 기본값을 설정합니다.
-  use --channel <project|path>    channel 기본 작업공간을 설정합니다.
-  bind-channel <project|path>     현재 Slack channel을 project/workspace에 연결합니다.
-  unbind-channel
-  new [-f] [project] <prompt>     새 Codex 작업을 대기열에 넣습니다. -f면 즉시 실행합니다.
-  new --cwd <project|path> <prompt>
-  send [-f] <prompt>              현재 Codex session 명령을 대기열에 넣습니다. -f면 즉시 실행합니다.
-  steer <prompt>                  실행 중인 active turn에만 추가 입력합니다.
-  resume <codexThreadId|last> [prompt]
-  rerun [number|codexThreadId|last] [prompt]
-  recent                           Slack/로컬 Codex CLI 최근 세션을 봅니다.
-  recent --channel <name> [number] 최근 세션 cwd/session을 새 channel에 연결합니다.
-  sessions                         recent 별칭입니다.
-  rerun-session <number|codexThreadId|last> [prompt]
-  pending                          대기 중인 명령을 봅니다.
-  pending-edit <number|id> <prompt>
-  pending-drop <number|id>
-  pending-run <number|id|all>
-  status
-  stop
-
-사용 예:
-  ${prefix} language ko
-  ${prefix} new api fix the failing tests     # 대기열에 추가
-  ${prefix} new -f api fix the failing tests  # 즉시 실행
-  /codex my-project-channel                   # 새 Slack channel 생성
-  ${prefix} send $example inspect this repo and summarize next steps
-  @YourBot send $test-fixer fix the flaky CI
-
-참고:
-  - new/send/rerun은 기본적으로 pending에 저장됩니다. 즉시 실행하려면 -f 또는 --force를 붙이세요.
-  - /codex slash command는 channel에서 동작하지만 Slack thread 안에서는 동작하지 않습니다.
-  - thread 안에서는 @bot 또는 ${prefix}를 사용하세요.
-  - Slack은 메시지 입력 중인 $ 문자를 봇에게 실시간 전달하지 않으므로, $ 또는 $prefix를 메시지로 보내 목록을 확인하세요.
-  - STRICT_SKILL_REFERENCES=1이면 $skill은 config/skills.yaml에 등록되어 있어야 합니다.`);
+    return [
+      "*Codex commands*",
+      "- `?` / `commands <prefix>`: 명령어 선택 메뉴",
+      "- `$` / `$prefix`: 스킬 선택 메뉴",
+      "- `pwd`, `ls`, `cd <path>`: 작업공간 탐색",
+      "- `new [-f] <prompt>`: 새 세션 대기/즉시 실행",
+      "- `send [-f] <prompt>`: 현재 세션에 입력",
+      "- `recent`: Slack/로컬 CLI 세션 목록",
+      "- `active`: 실행 중인 CLI 세션 목록",
+      "- `active --channel <name> <number>`: active CLI 세션으로 채널 생성/연결",
+      "- `history [session]`: 세션 내 이전 명령 보기",
+      "- `rerun-command <number> [session]`: 이력 명령 재실행",
+      "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: 대기 명령 관리",
+      "- `language en|ko`: 안내 언어 변경",
+      "",
+      `기본은 대기열 저장입니다. 즉시 실행하려면 \`-f\`를 붙이세요. Thread에서는 \`${prefix}\` 또는 @bot을 사용하세요.`
+    ].join("\n");
   }
 
-  return codeBlock(`Commands:
-  help
-  commands [prefix]               Show command suggestions. Example: commands pend
-  ?                                Show common command suggestions.
-  language en|ko                 Change bot help/status language.
-  projects
-  skills [prefix]                 Show configured skills. Example: skills rev
-  $ or $prefix                    Show configured skills or prefix matches.
-  pwd
-  ls [path]                       List files/folders in the current workspace.
-  use <project|path>              Set workspace for this thread, or channel if not in a thread.
-  use --channel <project|path>    Set channel default workspace.
-  bind-channel <project|path>     Bind this Slack channel to a project/workspace.
-  unbind-channel
-  new [-f] [project] <prompt>     Queue a fresh Codex task. Use -f to execute immediately.
-  new --cwd <project|path> <prompt>
-  send [-f] <prompt>              Queue a command for the current Codex session. Use -f to execute immediately.
-  steer <prompt>                  Add input to active in-flight turn only.
-  resume <codexThreadId|last> [prompt]
-  rerun [number|codexThreadId|last] [prompt]
-  recent                           Show Slack and local Codex CLI recent sessions.
-  recent --channel <name> [number] Create/link a channel from a recent session cwd/session.
-  sessions                         Alias for recent.
-  rerun-session <number|codexThreadId|last> [prompt]
-  pending                          Show queued commands.
-  pending-edit <number|id> <prompt>
-  pending-drop <number|id>
-  pending-run <number|id|all>
-  status
-  stop
-
-Message usage:
-  ${prefix} new api fix the failing tests     # queue for review/edit
-  ${prefix} new -f api fix the failing tests  # execute immediately
-  /codex my-project-channel                   # create a new Slack channel
-  ${prefix} send $example inspect this repo and summarize next steps
-  @YourBot send $test-fixer fix the flaky CI
-
-Notes:
-  - new/send/rerun queue by default. Add -f or --force to execute immediately.
-  - Slash command /codex works in channels, but Slack slash commands do not run inside threads.
-  - Use @bot or ${prefix} inside Slack threads.
-  - Slack does not expose live message-composer keystrokes to bots, so send $ or $prefix as a message to look up skills.
-  - $skill references must exist in config/skills.yaml when STRICT_SKILL_REFERENCES=1.`);
+  return [
+    "*Codex commands*",
+    "- `?` / `commands <prefix>`: command picker",
+    "- `$` / `$prefix`: skill picker",
+    "- `pwd`, `ls`, `cd <path>`: browse workspace",
+    "- `new [-f] <prompt>`: queue/start a new session",
+    "- `send [-f] <prompt>`: continue current session",
+    "- `recent`: Slack/local CLI sessions",
+    "- `active`: running CLI sessions",
+    "- `active --channel <name> <number>`: create/link a channel from an active CLI session",
+    "- `history [session]`: show commands sent in a session",
+    "- `rerun-command <number> [session]`: rerun a history command",
+    "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: manage queued commands",
+    "- `language en|ko`: change help language",
+    "",
+    `Commands queue by default. Add \`-f\` to run immediately. In threads, use \`${prefix}\` or @bot.`
+  ].join("\n");
 }

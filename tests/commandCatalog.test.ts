@@ -5,6 +5,8 @@ describe("command suggestions", () => {
   it("suggests commands by prefix", () => {
     expect(commandSuggestions("pend").map((suggestion) => suggestion.entry.name)).toContain("pending");
     expect(commandSuggestions("rerun-s").map((suggestion) => suggestion.entry.name)).toContain("rerun-session");
+    expect(commandSuggestions("hist").map((suggestion) => suggestion.entry.name)).toContain("history");
+    expect(commandSuggestions("active").map((suggestion) => suggestion.entry.name)).toContain("active");
   });
 
   it("suggests commands by small typos", () => {

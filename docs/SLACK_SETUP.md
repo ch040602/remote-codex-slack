@@ -50,7 +50,7 @@ Create a slash command:
 Command: /codex
 Request URL: use any valid placeholder if Slack requires one; Socket Mode will deliver the command.
 Short description: Control local Codex
-Usage hint: help | new | send | resume | recent | rerun | pwd
+Usage hint: ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active | history
 ```
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
@@ -153,6 +153,22 @@ To fork a recent session into another channel:
 `recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 
 For local Codex CLI sessions, `active` means the JSONL log has an unfinished turn or a currently running local `codex` process references that session ID. This also covers sessions you opened directly in a terminal.
+
+To create or link a channel from a currently running CLI session:
+
+```text
+/codex active
+/codex active --channel api-followup 1
+```
+
+To view commands from a session and rerun one exactly:
+
+```text
+!codex history
+!codex history 2
+!codex rerun-command 1
+!codex rerun-command 1 2
+```
 
 Command explanations are English by default. To switch a channel or thread to Korean:
 

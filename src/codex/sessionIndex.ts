@@ -13,6 +13,12 @@ export interface CodexCliSessionSummary {
   title?: string;
   lastPrompt?: string;
   lastFinalAnswer?: string;
+  commands: CodexCliSessionCommand[];
+}
+
+export interface CodexCliSessionCommand {
+  timestamp: string;
+  prompt: string;
 }
 
 export interface CodexCliSessionListOptions {
@@ -55,6 +61,7 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
   let lastFinalAnswer = "";
   let lastTaskStartedAt = "";
   let lastTaskCompletedAt = "";
+  const commands: CodexCliSessionCommand[] = [];
 
   const content = fs.readFileSync(filePath, "utf8");
   for (const line of content.split(/\r?\n/)) {
@@ -97,6 +104,7 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
       if (text) {
         if (!firstUserPrompt) firstUserPrompt = text;
         lastPrompt = text;
+        commands.push({ timestamp: timestamp ?? (updatedAt || fallbackMtime.toISOString()), prompt: text });
       }
       continue;
     }
@@ -112,6 +120,7 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
       if (text) {
         if (!firstUserPrompt) firstUserPrompt = text;
         lastPrompt = text;
+        commands.push({ timestamp: timestamp ?? (updatedAt || fallbackMtime.toISOString()), prompt: text });
       }
       continue;
     }
@@ -135,7 +144,8 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
     path: filePath,
     title: firstUserPrompt ? preview(firstUserPrompt, 80) : undefined,
     lastPrompt: lastPrompt || undefined,
-    lastFinalAnswer: lastFinalAnswer || undefined
+    lastFinalAnswer: lastFinalAnswer || undefined,
+    commands
   };
 }
 

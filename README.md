@@ -128,7 +128,7 @@ Slash command settings:
 Command: /codex
 Request URL: leave any valid placeholder if Slack requires one; Socket Mode delivers the command to Bolt.
 Short description: Control local Codex
-Usage hint: help | new | send | resume | recent | rerun | pwd
+Usage hint: ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active | history
 ```
 
 Slack slash commands do not execute inside threads. Use an `@bot` mention or the configured message prefix inside threads.
@@ -585,6 +585,25 @@ Explore recent sessions:
 The list includes Slack-created sessions and existing local Codex CLI sessions from `CODEX_SESSIONS_DIR`. Each entry shows the Codex session ID, status, working path, Slack thread when already bound, last prompt, and last response preview.
 
 For local Codex CLI sessions, `active` means the JSONL log has an unfinished turn or a currently running local `codex` process references that session ID. This includes Codex sessions you opened directly in a terminal, even if they were not started through Slack.
+
+Show only active CLI sessions and create a channel from one:
+
+```text
+/codex active
+/codex active --channel repo-followup 1
+```
+
+View commands sent inside a session and rerun one exactly:
+
+```text
+!codex history
+!codex history 2
+!codex rerun-command 1
+!codex rerun-command 1 2
+!codex rerun-command -f 1 2
+```
+
+`history` reads Slack-recorded commands for Slack-created sessions and user prompts from local Codex CLI JSONL logs for terminal-created sessions. `rerun-command` queues by default; add `-f` to execute immediately.
 
 Rerun the last stored prompt:
 

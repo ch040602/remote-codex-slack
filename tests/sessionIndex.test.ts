@@ -43,7 +43,36 @@ describe("Codex CLI session index", () => {
     expect(summary?.cwd).toBe("C:/repo");
     expect(summary?.lastPrompt).toBe("fix the tests");
     expect(summary?.lastFinalAnswer).toBe("tests are fixed");
+    expect(summary?.commands.map((command) => command.prompt)).toEqual(["fix the tests"]);
     expect(listCodexCliSessions({ sessionsDir: dir, limit: 1, detectActiveProcesses: false }).map((s) => s.id)).toEqual(["019f20cf-7b8a-7c52-b037-d90afad6fd44"]);
+  });
+
+  it("reads multiple user prompts as session commands", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-session-index-commands-"));
+    const file = path.join(dir, "rollout-2026-07-02T12-00-00-019f20cf-7b8a-7c52-b037-d90afad6fd44.jsonl");
+    fs.writeFileSync(file, [
+      JSON.stringify({
+        timestamp: "2026-07-02T03:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          session_id: "019f20cf-7b8a-7c52-b037-d90afad6fd44",
+          timestamp: "2026-07-02T03:00:00.000Z",
+          cwd: "C:/repo"
+        }
+      }),
+      JSON.stringify({
+        timestamp: "2026-07-02T03:00:01.000Z",
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "first command" }] }
+      }),
+      JSON.stringify({
+        timestamp: "2026-07-02T03:00:02.000Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: "second command" }
+      })
+    ].join("\n"));
+
+    expect(readCodexCliSession(file)?.commands.map((command) => command.prompt)).toEqual(["first command", "second command"]);
   });
 
   it("marks sessions active when the turn has started but not completed", () => {
