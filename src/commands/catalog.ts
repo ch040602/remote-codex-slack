@@ -29,7 +29,7 @@ export const COMMAND_HELP: CommandHelpEntry[] = [
   { name: "new", usage: "new [-f] [--cwd path] <prompt>", en: "Queue or start a new Codex session.", ko: "새 Codex 세션을 대기열에 넣거나 시작합니다." },
   { name: "send", usage: "send [-f] <prompt>", en: "Queue or send input to the current session.", ko: "현재 세션에 보낼 입력을 대기열에 넣거나 전송합니다." },
   { name: "steer", usage: "steer <prompt>", en: "Add input to an active in-flight turn.", ko: "실행 중인 turn에 추가 입력을 보냅니다." },
-  { name: "resume", usage: "resume <codexThreadId|last> [prompt]", en: "Bind/resume an existing Codex session.", ko: "기존 Codex 세션을 연결하거나 이어갑니다." },
+  { name: "resume", usage: "resume <number|codexThreadId|last> [prompt]", en: "Bind/resume a recent or existing Codex session.", ko: "번호 또는 ID로 기존 Codex 세션을 연결하거나 이어갑니다." },
   { name: "recent", usage: "recent [--channel name] [number]", en: "Show Slack and local Codex CLI sessions.", ko: "Slack 및 로컬 Codex CLI 최근 세션을 봅니다.", aliases: ["sessions"] },
   { name: "active", usage: "active [--channel name] [number]", en: "Show active CLI sessions or link one to a channel.", ko: "실행 중인 CLI 세션을 보거나 채널에 연결합니다." },
   { name: "history", usage: "history [session]", en: "Show commands sent in a session.", ko: "세션 내 이전 명령을 봅니다." },

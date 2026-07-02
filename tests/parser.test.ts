@@ -35,6 +35,7 @@ describe("command parser", () => {
     expect(parseCommand("active --channel repo 1").name).toBe("active");
     expect(parseCommand("history 2").name).toBe("history");
     expect(parseCommand("rerun-command 3 2").name).toBe("rerun-command");
+    expect(parseCommand("resume 2 continue work").args).toEqual(["2", "continue", "work"]);
     const rerun = parseCommand("rerun-session 2 fix lint");
     expect(rerun.name).toBe("rerun-session");
     expect(rerun.args).toEqual(["2", "fix", "lint"]);

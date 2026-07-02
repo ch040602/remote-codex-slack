@@ -482,12 +482,12 @@ export class SlackBridge {
   private async handleResume(ctx: CommandContext, cmd: ParsedCommand) {
     const threadId = cmd.args[0];
     if (!threadId) {
-      await this.reply(ctx, "Usage: `resume <codexThreadId|last> [prompt]`");
+      await this.reply(ctx, "Usage: `resume <number|codexThreadId|last> [prompt]`");
       return;
     }
     const selected = this.resolveRecentSession(ctx, threadId, false);
     const codexThreadId = threadId === "last" ? selected?.codexThreadId : selected?.codexThreadId ?? threadId;
-    if (!codexThreadId) throw new Error("No last Codex thread found for this channel");
+    if (!codexThreadId) throw new Error(`No recent Codex session found for selector: ${threadId}`);
 
     const workspace = optionString(cmd, "cwd", "project", "workspace")
       ? this.workspaceFromCommandOrContext(ctx, cmd)
@@ -1477,6 +1477,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `new [-f] <prompt>`: 새 세션 대기/즉시 실행",
       "- `send [-f] <prompt>`: 현재 세션에 입력",
       "- `recent`: Slack/로컬 CLI 세션 목록",
+      "- `resume <number|id|last>`: 최근 목록에서 번호/ID로 세션 연결",
       "- `active`: 실행 중인 CLI 세션 목록",
       "- `active --channel <name> <number>`: active CLI 세션으로 채널 생성/연결",
       "- `history [session]`: 세션 내 이전 명령 보기",
@@ -1496,6 +1497,7 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `new [-f] <prompt>`: queue/start a new session",
     "- `send [-f] <prompt>`: continue current session",
     "- `recent`: Slack/local CLI sessions",
+    "- `resume <number|id|last>`: bind a session from the recent list",
     "- `active`: running CLI sessions",
     "- `active --channel <name> <number>`: create/link a channel from an active CLI session",
     "- `history [session]`: show commands sent in a session",

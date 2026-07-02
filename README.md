@@ -571,6 +571,9 @@ Steer only an active turn:
 Resume an existing Codex thread:
 
 ```text
+/codex recent
+/codex resume 2
+/codex resume 2 continue with lint fixes
 /codex resume thr_1234567890abcdef
 /codex resume thr_1234567890abcdef continue with lint fixes
 ```
