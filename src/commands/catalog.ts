@@ -36,7 +36,7 @@ export const COMMAND_HELP: CommandHelpEntry[] = [
   { name: "recent", usage: "recent [--channel name] [number]", en: "Show Slack and local Codex CLI sessions.", ko: "Slack 및 로컬 Codex CLI 최근 세션을 봅니다.", aliases: ["sessions"] },
   { name: "active", usage: "active [--channel name] [number]", en: "Show active CLI sessions or link one to a channel.", ko: "실행 중인 CLI 세션을 보거나 채널에 연결합니다." },
   { name: "history", usage: "history [session]", en: "Show commands sent in a session.", ko: "세션 내 이전 명령을 봅니다." },
-  { name: "rerun", usage: "rerun [number|codexThreadId|last] [prompt]", en: "Rerun a stored prompt by send policy.", ko: "send policy에 따라 저장된 prompt를 다시 실행합니다." },
+  { name: "rerun", usage: "rerun [number|codexThreadId|last] [prompt]", en: "Open a preview picker, or rerun a stored prompt by send policy.", ko: "미리보기 선택 메뉴를 열거나 send policy에 따라 저장된 prompt를 다시 실행합니다." },
   { name: "rerun-session", usage: "rerun-session <number|codexThreadId|last> [prompt]", en: "Rerun a recent session by send policy.", ko: "send policy에 따라 최근 세션을 다시 실행합니다." },
   { name: "rerun-command", usage: "rerun-command [-f] <command-number> [session]", en: "Rerun a command from session history by send policy.", ko: "send policy에 따라 세션 이력의 명령을 다시 실행합니다." },
   { name: "pending", usage: "pending", en: "Show queued commands.", ko: "대기 중인 명령을 봅니다." },

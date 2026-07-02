@@ -665,12 +665,19 @@ View commands sent inside a session and rerun one exactly:
 !codex rerun-command -f 1 2
 ```
 
-`history` reads Slack-recorded commands for Slack-created sessions and user prompts from local Codex CLI JSONL logs for terminal-created sessions. `rerun-command` queues by default; add `-f` to execute immediately.
+`history` reads Slack-recorded commands for Slack-created sessions and user prompts from local Codex CLI JSONL logs for terminal-created sessions. `rerun-command` follows the current `send-policy`; add `-f` to execute immediately.
 
-Rerun the last stored prompt:
+Open the rerun picker:
 
 ```text
 !codex rerun
+```
+
+With no arguments, `rerun` shows recent rerun candidates with previews. Choose one from the dropdown, then use `Run now`, `Queue`, `Full preview`, or `Cancel`. `Full preview` shows the complete prompt and last response.
+
+Rerun the current session with a new prompt:
+
+```text
 !codex rerun $review review the updated diff again
 ```
 

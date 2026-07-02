@@ -30,7 +30,7 @@ interface CommandContext {
 }
 
 interface AssistActionValue {
-  kind: "command" | "skill" | "bind-session" | "session-action" | "pending-action";
+  kind: "command" | "skill" | "bind-session" | "session-action" | "pending-action" | "rerun-action";
   command?: string;
   rawText?: string;
   sessionId?: string;
@@ -135,6 +135,16 @@ export class SlackBridge {
     });
 
     this.app.action("codex_pending_action", async ({ ack, body, client, respond }: any) => {
+      await ack();
+      await this.handleAssistAction(body, client, respond);
+    });
+
+    this.app.action("codex_rerun_select", async ({ ack, body, client, respond }: any) => {
+      await ack();
+      await this.handleAssistAction(body, client, respond);
+    });
+
+    this.app.action("codex_rerun_action", async ({ ack, body, client, respond }: any) => {
       await ack();
       await this.handleAssistAction(body, client, respond);
     });
@@ -741,6 +751,11 @@ export class SlackBridge {
   }
 
   private async handleRerun(ctx: CommandContext, cmd: ParsedCommand) {
+    if (cmd.args.length === 0) {
+      await this.handleRerunPicker(ctx);
+      return;
+    }
+
     const selected = this.resolveOptionalRerunSelection(ctx, cmd);
     const binding = selected.binding;
     if (!binding?.codexThreadId) throw new Error("No Codex session to rerun. Use `new` first.");
@@ -807,6 +822,82 @@ export class SlackBridge {
       binding.lastFinalAnswer ? `previous last response: ${preview(binding.lastFinalAnswer, 500)}` : undefined,
       referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
     ].filter(Boolean).join("\n"));
+  }
+
+  private async handleRerunPicker(ctx: CommandContext) {
+    const candidates = this.rerunCandidates(ctx, 15);
+    const language = this.currentLanguage(ctx);
+    if (candidates.length === 0) {
+      await this.reply(ctx, language === "ko" ? "재실행할 이전 prompt가 없습니다." : "No previous prompt is available to rerun.");
+      return;
+    }
+    const text = renderRerunPicker(candidates, language);
+    await this.replyWithBlocks(ctx, {
+      text,
+      blocks: rerunPickerBlocks(candidates, language, text)
+    });
+  }
+
+  private rerunCandidates(ctx: CommandContext, limit: number): SlackThreadBinding[] {
+    const candidates: SlackThreadBinding[] = [];
+    const seen = new Set<string>();
+    const add = (session: SlackThreadBinding | undefined) => {
+      if (!session?.codexThreadId || !session.lastPrompt) return;
+      const key = session.codexThreadId;
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push(session);
+    };
+
+    add(this.currentThreadBinding(ctx));
+    add(this.store.findLatestForChannel(ctx.channelId));
+    for (const session of this.listRecentSessions(50)) add(session);
+    return candidates.slice(0, limit);
+  }
+
+  private async showRerunSelection(ctx: CommandContext, selector: string) {
+    const binding = this.resolveRecentSession(ctx, selector);
+    if (!binding?.codexThreadId || !binding.lastPrompt) throw new Error(`No rerunnable prompt found for selector: ${selector}`);
+    const language = this.currentLanguage(ctx);
+    const text = renderRerunSelection(binding, language);
+    await this.replyWithBlocks(ctx, {
+      text,
+      blocks: rerunSelectionBlocks(binding, language, text)
+    });
+  }
+
+  private async handleRerunAction(ctx: CommandContext, selector: string, action: string) {
+    const binding = this.resolveRecentSession(ctx, selector);
+    if (!binding?.codexThreadId || !binding.lastPrompt) throw new Error(`No rerunnable prompt found for selector: ${selector}`);
+    const prompt = binding.lastPrompt;
+
+    if (action === "run") {
+      if (await this.replyIfUnknownSkills(ctx, prompt)) return;
+      await this.startRerun(ctx, binding, prompt, selector);
+      return;
+    }
+
+    if (action === "queue") {
+      if (await this.replyIfUnknownSkills(ctx, prompt)) return;
+      await this.enqueuePending(ctx, {
+        command: "rerun",
+        prompt,
+        selector: binding.codexThreadId
+      });
+      return;
+    }
+
+    if (action === "full-preview") {
+      await this.reply(ctx, renderRerunFullPreview(binding, this.currentLanguage(ctx)));
+      return;
+    }
+
+    if (action === "cancel") {
+      await this.reply(ctx, this.currentLanguage(ctx) === "ko" ? "재실행을 취소했습니다." : "Rerun cancelled.");
+      return;
+    }
+
+    await this.reply(ctx, `Unknown rerun action: ${action}`);
   }
 
   private async handleSessions(ctx: CommandContext, cmd: ParsedCommand) {
@@ -1573,6 +1664,15 @@ export class SlackBridge {
       await this.handlePendingAction(ctx, value.pendingId, value.command);
       return;
     }
+
+    if (value.kind === "rerun-action" && value.sessionId && value.command) {
+      if (value.command === "select") {
+        await this.showRerunSelection(ctx, value.sessionId);
+      } else {
+        await this.handleRerunAction(ctx, value.sessionId, value.command);
+      }
+      return;
+    }
   }
 
   private async handleCommandSelect(ctx: CommandContext, command: string) {
@@ -1788,6 +1888,141 @@ function renderPendingConfirmation(command: PendingCommand, language: LanguageCo
         "Choose how to handle this command."
       ];
   return lines.filter(Boolean).join("\n");
+}
+
+function rerunPickerBlocks(sessions: SlackThreadBinding[], language: LanguageCode, text: string): any[] {
+  const options = sessions
+    .filter((session) => session.codexThreadId && session.lastPrompt)
+    .slice(0, 100)
+    .map((session, index) => ({
+      text: { type: "plain_text", text: optionLabel(`${index + 1}. ${workspaceFolderName(session.cwd)} ${session.status}`) },
+      description: { type: "plain_text", text: optionLabel(session.lastPrompt ?? session.cwd) },
+      value: JSON.stringify({ kind: "rerun-action", command: "select", sessionId: session.codexThreadId } satisfies AssistActionValue)
+    }));
+
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "static_select",
+          action_id: "codex_rerun_select",
+          placeholder: { type: "plain_text", text: language === "ko" ? "재실행할 항목 선택" : "Choose rerun target" },
+          options
+        }
+      ]
+    }
+  ];
+}
+
+function rerunSelectionBlocks(session: SlackThreadBinding, language: LanguageCode, text: string): any[] {
+  const labels = language === "ko"
+    ? { run: "지금 실행", queue: "대기열 추가", fullPreview: "전체보기", cancel: "취소" }
+    : { run: "Run now", queue: "Queue", fullPreview: "Full preview", cancel: "Cancel" };
+  const sessionId = session.codexThreadId ?? "";
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        rerunActionButton(labels.run, sessionId, "run", "primary"),
+        rerunActionButton(labels.queue, sessionId, "queue"),
+        rerunActionButton(labels.fullPreview, sessionId, "full-preview"),
+        rerunActionButton(labels.cancel, sessionId, "cancel", "danger")
+      ]
+    }
+  ];
+}
+
+function rerunActionButton(label: string, sessionId: string, command: string, style?: "primary" | "danger"): any {
+  return {
+    type: "button",
+    action_id: "codex_rerun_action",
+    text: { type: "plain_text", text: label },
+    value: JSON.stringify({ kind: "rerun-action", command, sessionId } satisfies AssistActionValue),
+    ...(style ? { style } : {})
+  };
+}
+
+function renderRerunPicker(sessions: SlackThreadBinding[], language: LanguageCode): string {
+  const lines = language === "ko"
+    ? [
+        "*재실행할 세션 선택*",
+        "아래 미리보기를 확인한 뒤 드롭다운에서 항목을 선택하세요.",
+        "",
+        ...sessions.slice(0, 8).map((session, index) => renderRerunCandidate(session, index)),
+        sessions.length > 8 ? `... 드롭다운에 ${sessions.length - 8}개 더 있음` : undefined,
+        "",
+        "선택 후 `전체보기`로 prompt와 마지막 응답 전체를 볼 수 있습니다."
+      ]
+    : [
+        "*Choose a rerun target*",
+        "Review the previews below, then choose an item from the dropdown.",
+        "",
+        ...sessions.slice(0, 8).map((session, index) => renderRerunCandidate(session, index)),
+        sessions.length > 8 ? `... ${sessions.length - 8} more in the dropdown` : undefined,
+        "",
+        "After choosing, use `Full preview` to view the complete prompt and last response."
+      ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function renderRerunCandidate(session: SlackThreadBinding, index: number): string {
+  return [
+    `${index + 1}. ${codeInline(workspaceFolderName(session.cwd))} ${codeInline(session.status)}`,
+    `   session: ${session.codexThreadId ?? "unbound"}`,
+    `   cwd: ${session.cwd}`,
+    session.lastPrompt ? `   prompt: ${preview(session.lastPrompt, 120)}` : undefined,
+    session.lastFinalAnswer ? `   last response: ${preview(session.lastFinalAnswer, 120)}` : undefined
+  ].filter(Boolean).join("\n");
+}
+
+function renderRerunSelection(session: SlackThreadBinding, language: LanguageCode): string {
+  const lines = language === "ko"
+    ? [
+        "*재실행 미리보기*",
+        `workspace: ${codeInline(workspaceFolderName(session.cwd))}`,
+        `cwd: ${codeInline(session.cwd)}`,
+        `session: ${codeInline(session.codexThreadId ?? "unbound")}`,
+        `status: ${codeInline(session.status)}`,
+        "",
+        `prompt: ${preview(session.lastPrompt ?? "", 1200)}`,
+        session.lastFinalAnswer ? `last response: ${preview(session.lastFinalAnswer, 1200)}` : "last response: (none yet)",
+        "",
+        "처리 방식을 선택하세요."
+      ]
+    : [
+        "*Rerun preview*",
+        `workspace: ${codeInline(workspaceFolderName(session.cwd))}`,
+        `cwd: ${codeInline(session.cwd)}`,
+        `session: ${codeInline(session.codexThreadId ?? "unbound")}`,
+        `status: ${codeInline(session.status)}`,
+        "",
+        `prompt: ${preview(session.lastPrompt ?? "", 1200)}`,
+        session.lastFinalAnswer ? `last response: ${preview(session.lastFinalAnswer, 1200)}` : "last response: (none yet)",
+        "",
+        "Choose how to handle this rerun."
+      ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function renderRerunFullPreview(session: SlackThreadBinding, language: LanguageCode): string {
+  const title = language === "ko" ? "*재실행 전체보기*" : "*Full rerun preview*";
+  const noResponse = language === "ko" ? "(아직 마지막 응답 없음)" : "(none yet)";
+  return [
+    title,
+    `workspace: ${workspaceFolderName(session.cwd)}`,
+    `cwd: ${session.cwd}`,
+    `session: ${session.codexThreadId ?? "unbound"}`,
+    `status: ${session.status}`,
+    "",
+    language === "ko" ? "prompt 전체:" : "full prompt:",
+    session.lastPrompt ?? "",
+    "",
+    language === "ko" ? "마지막 응답 전체:" : "full last response:",
+    session.lastFinalAnswer ?? noResponse
+  ].join("\n");
 }
 
 function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode: boolean, sendPolicy: SendPolicy): any[] {
@@ -2122,6 +2357,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `active`: 실행 중인 CLI 세션 목록",
       "- `active --channel <name> <number>`: active CLI 세션으로 채널 생성/연결",
       "- `history [session]`: 세션 내 이전 명령 보기",
+      "- `rerun`: 재실행 후보 미리보기/선택 메뉴",
       "- `rerun-command [-f] <number> [session]`: send policy에 따라 이력 명령 재실행",
       "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: 대기 명령 관리",
       "- `language en|ko`: 안내 언어 변경",
@@ -2147,6 +2383,7 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `active`: running CLI sessions",
     "- `active --channel <name> <number>`: create/link a channel from an active CLI session",
     "- `history [session]`: show commands sent in a session",
+    "- `rerun`: preview and choose a rerun target",
     "- `rerun-command [-f] <number> [session]`: rerun a history command by send policy",
     "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: manage queued commands",
     "- `language en|ko`: change help language",

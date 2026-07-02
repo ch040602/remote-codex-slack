@@ -206,7 +206,7 @@ To view commands from a session and rerun one exactly:
 !codex rerun-command -f 1 2
 ```
 
-`rerun-command` queues the selected previous command by default. Add `-f` to execute it immediately.
+`rerun-command` follows the current `send-policy`; add `-f` to execute immediately. Use `!codex rerun` with no arguments to open a preview picker. After choosing a session, use `Full preview` to see the complete prompt and last response before running or queueing it.
 
 Command explanations are English by default. To switch a channel or thread to Korean:
 
