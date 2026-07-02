@@ -105,6 +105,17 @@ To browse configured local skills before sending work:
 
 Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or `skills <prefix>` as a message to get the list or filtered matches.
 
+To browse command suggestions or recover from a partial command:
+
+```text
+/codex ?
+/codex commands pend
+/codex pend
+!codex statu
+```
+
+Suggestion text follows the current `language en|ko` setting.
+
 You can also create a project channel directly from Slack:
 
 ```text

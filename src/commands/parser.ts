@@ -2,6 +2,7 @@ import type { CommandName, ParsedCommand } from "./types.js";
 
 const KNOWN = new Set<CommandName>([
   "help",
+  "commands",
   "projects",
   "skills",
   "language",

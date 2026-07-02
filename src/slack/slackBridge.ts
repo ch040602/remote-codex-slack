@@ -11,6 +11,7 @@ import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { commandTarget, hasOption, optionString, parseCommand, stripBotMention, stripPrefix } from "../commands/parser.js";
+import { hasCommandSuggestion, renderCommandSuggestions } from "../commands/catalog.js";
 import type { ParsedCommand } from "../commands/types.js";
 import { splitForSlack, codeBlock } from "./messageUtils.js";
 
@@ -108,6 +109,12 @@ export class SlackBridge {
       const parsed = parseCommand(ctx.rawText);
       logger.info("slack command", { userId: ctx.userId, channelId: ctx.channelId, name: parsed.name });
 
+      const commandLookup = this.commandLookupQuery(ctx, parsed);
+      if (commandLookup !== undefined) {
+        await this.reply(ctx, renderCommandSuggestions(commandLookup, this.currentLanguage(ctx), env.commandPrefix));
+        return;
+      }
+
       if (this.isChannelCreationShortcut(ctx, parsed)) {
         await this.handleCreateChannelShortcut(ctx, parsed.rawArgs);
         return;
@@ -116,6 +123,9 @@ export class SlackBridge {
       switch (parsed.name) {
         case "help":
           await this.reply(ctx, helpText(env.commandPrefix, this.currentLanguage(ctx)));
+          return;
+        case "commands":
+          await this.reply(ctx, renderCommandSuggestions(parsed.args.join(" ").trim(), this.currentLanguage(ctx), env.commandPrefix));
           return;
         case "projects":
           await this.reply(ctx, this.renderProjects());
@@ -200,6 +210,18 @@ export class SlackBridge {
 
   private isAllowed(userId: string) {
     return env.allowAllSlackUsers || env.allowedSlackUserIds.includes(userId);
+  }
+
+  private commandLookupQuery(_ctx: CommandContext, parsed: ParsedCommand): string | undefined {
+    const raw = parsed.rawArgs.trim();
+    if (parsed.name !== "send") return undefined;
+    if (!raw || raw.startsWith("$")) return undefined;
+    if (raw === "?") return "";
+
+    const first = raw.split(/\s+/)[0];
+    if (!/^[A-Za-z가-힣?_-]+$/.test(first)) return undefined;
+    if (hasCommandSuggestion(first)) return first;
+    return undefined;
   }
 
   private async handleUse(ctx: CommandContext, cmd: ParsedCommand) {
@@ -1108,6 +1130,8 @@ function helpText(prefix: string, language: LanguageCode): string {
   if (language === "ko") {
     return codeBlock(`명령어:
   help
+  commands [prefix]               명령어 추천을 봅니다. 예: commands pend
+  ?                                자주 쓰는 명령어를 추천합니다.
   language en|ko                 봇 안내 언어를 영어/한국어로 변경합니다.
   projects
   skills [prefix]                 등록된 skill을 봅니다. 예: skills rev
@@ -1153,6 +1177,8 @@ function helpText(prefix: string, language: LanguageCode): string {
 
   return codeBlock(`Commands:
   help
+  commands [prefix]               Show command suggestions. Example: commands pend
+  ?                                Show common command suggestions.
   language en|ko                 Change bot help/status language.
   projects
   skills [prefix]                 Show configured skills. Example: skills rev

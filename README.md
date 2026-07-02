@@ -266,6 +266,20 @@ In CLI mode, the bridge embeds the referenced `SKILL.md` content into the prompt
 
 When `STRICT_SKILL_REFERENCES=1`, unconfigured `$tokens` fail the command instead of being left as plain text.
 
+## Command Suggestions
+
+Slack bots cannot provide dynamic autocomplete for normal message text, but the bridge recommends commands when you send a partial command or typo:
+
+```text
+/codex ?
+/codex commands pend
+/codex pend
+!codex rerun-s
+!codex statu
+```
+
+Suggestions follow the current `language en|ko` setting for the channel or thread. If a slash command such as `/codex pend` matches a command prefix, the bridge shows suggestions instead of creating a new channel named `pend`.
+
 ## Running
 
 Development:

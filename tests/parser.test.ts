@@ -43,6 +43,12 @@ describe("command parser", () => {
     expect(parseCommand("언어 ko").name).toBe("언어");
   });
 
+  it("parses command suggestion lookup", () => {
+    const cmd = parseCommand("commands pend");
+    expect(cmd.name).toBe("commands");
+    expect(cmd.args).toEqual(["pend"]);
+  });
+
   it("parses force flags without consuming prompt text", () => {
     const short = parseCommand("send -f fix tests");
     expect(short.options.f).toBe(true);

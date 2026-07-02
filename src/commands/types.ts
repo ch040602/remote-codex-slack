@@ -1,5 +1,6 @@
 export type CommandName =
   | "help"
+  | "commands"
   | "projects"
   | "skills"
   | "language"
