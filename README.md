@@ -128,7 +128,7 @@ Slash command settings:
 Command: /codex
 Request URL: leave any valid placeholder if Slack requires one; Socket Mode delivers the command to Bolt.
 Short description: Control local Codex
-Usage hint: ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active | history
+Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active
 ```
 
 Slack slash commands do not execute inside threads. Use an `@bot` mention or the configured message prefix inside threads.
@@ -243,14 +243,19 @@ skills:
 Use skills in Slack prompts with `$skill-name`:
 
 ```text
+$test-fixer fix the failing CI tests
 !codex send $test-fixer fix the failing CI tests
 ```
+
+In channels where the bot is present, a message that starts with `$` is treated as a Codex skill command even without `!codex send`. Send `$` or `$prefix` by itself to open the skill picker.
 
 To browse local skills from Slack, send `$` or a prefix lookup:
 
 ```text
 /codex $
 /codex $rev
+/codex $review inspect this repo
+$review inspect this repo
 !codex skills test
 ```
 

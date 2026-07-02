@@ -17,6 +17,10 @@ describe("command parser", () => {
     const cmd = parseCommand("fix the bug");
     expect(cmd.name).toBe("send");
     expect(cmd.rawArgs).toBe("fix the bug");
+
+    const skill = parseCommand("$review fix the bug");
+    expect(skill.name).toBe("send");
+    expect(skill.rawArgs).toBe("$review fix the bug");
   });
 
   it("strips command prefix", () => {

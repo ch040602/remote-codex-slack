@@ -95,14 +95,15 @@ export class SlackBridge {
       if (msg.bot_id || !msg.text || !msg.user) return;
       const prefixed = stripPrefix(msg.text, env.commandPrefix);
       const isDirectMessage = msg.channel_type === "im";
-      if (prefixed === undefined && !isDirectMessage) return;
+      const skillShortcut = prefixed === undefined && this.isSkillPrefixedMessage(msg.text);
+      if (prefixed === undefined && !isDirectMessage && !skillShortcut) return;
       await this.handleCommand({
         userId: msg.user,
         channelId: msg.channel,
         threadTs: msg.thread_ts ?? msg.ts,
         messageTs: msg.ts,
         isSlash: false,
-        rawText: prefixed ?? msg.text,
+        rawText: prefixed ?? msg.text.trim(),
         client
       });
     });
@@ -1253,6 +1254,10 @@ export class SlackBridge {
 
   private isSkillLookupText(text: string): boolean {
     return /^\$[A-Za-z0-9_.-]*$/.test(text.trim());
+  }
+
+  private isSkillPrefixedMessage(text: string): boolean {
+    return /^\$[A-Za-z0-9_.-]*(\s|$)/.test(text.trim());
   }
 
   private async replyIfUnknownSkills(ctx: CommandContext, prompt: string): Promise<boolean> {

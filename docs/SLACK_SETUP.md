@@ -50,7 +50,7 @@ Create a slash command:
 Command: /codex
 Request URL: use any valid placeholder if Slack requires one; Socket Mode will deliver the command.
 Short description: Control local Codex
-Usage hint: ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active | history
+Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active
 ```
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
@@ -104,10 +104,12 @@ To browse configured local skills before sending work:
 ```text
 /codex $
 /codex $exa
+/codex $example summarize this repository
+$example summarize this repository
 /codex skills example
 ```
 
-Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow.
+Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow. A channel message that starts with `$skill` is treated as a Codex skill command even without `!codex send`.
 
 To browse command suggestions or recover from a partial command:
 
