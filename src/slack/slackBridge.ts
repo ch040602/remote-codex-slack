@@ -2,7 +2,7 @@ import { App } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 import fs from "node:fs";
 import { resolveUserPath } from "../config.js";
-import type { BridgeConfig } from "../config.js";
+import type { BridgeConfig, SkillDef } from "../config.js";
 import type { PathResolver, ResolvedWorkspace } from "../core/pathResolver.js";
 import type { LanguageCode, PendingCommand, Store, SlackThreadBinding } from "../core/store.js";
 import type { SkillRegistry } from "../core/skills.js";
@@ -11,7 +11,7 @@ import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { commandTarget, hasOption, optionString, parseCommand, stripBotMention, stripPrefix } from "../commands/parser.js";
-import { hasCommandSuggestion, renderCommandSuggestions } from "../commands/catalog.js";
+import { COMMAND_HELP, commandSuggestions, hasCommandSuggestion, renderCommandSuggestions } from "../commands/catalog.js";
 import type { ParsedCommand } from "../commands/types.js";
 import { splitForSlack, codeBlock } from "./messageUtils.js";
 
@@ -26,6 +26,15 @@ interface CommandContext {
   client: WebClient;
   respond?: (message: any) => Promise<any>;
 }
+
+interface AssistActionValue {
+  kind: "command" | "skill";
+  command?: string;
+  rawText?: string;
+  token?: string;
+}
+
+const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "pending", "status"]);
 
 export class SlackBridge {
   readonly app: App;
@@ -97,6 +106,16 @@ export class SlackBridge {
         client
       });
     });
+
+    this.app.action("codex_command_select", async ({ ack, body, client, respond }: any) => {
+      await ack();
+      await this.handleAssistAction(body, client, respond);
+    });
+
+    this.app.action("codex_skill_select", async ({ ack, body, client, respond }: any) => {
+      await ack();
+      await this.handleAssistAction(body, client, respond);
+    });
   }
 
   private async handleCommand(ctx: CommandContext) {
@@ -111,7 +130,7 @@ export class SlackBridge {
 
       const commandLookup = this.commandLookupQuery(ctx, parsed);
       if (commandLookup !== undefined) {
-        await this.reply(ctx, renderCommandSuggestions(commandLookup, this.currentLanguage(ctx), env.commandPrefix));
+        await this.replyWithBlocks(ctx, this.commandAssistMessage(commandLookup, this.currentLanguage(ctx)));
         return;
       }
 
@@ -122,16 +141,19 @@ export class SlackBridge {
 
       switch (parsed.name) {
         case "help":
-          await this.reply(ctx, helpText(env.commandPrefix, this.currentLanguage(ctx)));
+          await this.replyWithBlocks(ctx, {
+            text: helpText(env.commandPrefix, this.currentLanguage(ctx)),
+            blocks: commandPickerBlocks(this.currentLanguage(ctx), "")
+          });
           return;
         case "commands":
-          await this.reply(ctx, renderCommandSuggestions(parsed.args.join(" ").trim(), this.currentLanguage(ctx), env.commandPrefix));
+          await this.replyWithBlocks(ctx, this.commandAssistMessage(parsed.args.join(" ").trim(), this.currentLanguage(ctx)));
           return;
         case "projects":
           await this.reply(ctx, this.renderProjects());
           return;
         case "skills":
-          await this.reply(ctx, this.renderSkills(parsed.args.join(" ").trim()));
+          await this.replyWithBlocks(ctx, this.skillAssistMessage(parsed.args.join(" ").trim(), ctx.rawText));
           return;
         case "language":
         case "lang":
@@ -197,7 +219,7 @@ export class SlackBridge {
           return;
         default:
           if (this.isSkillLookupShortcut(parsed)) {
-            await this.reply(ctx, this.renderSkills(parsed.rawArgs.slice(1)));
+            await this.replyWithBlocks(ctx, this.skillAssistMessage(parsed.rawArgs.slice(1), ctx.rawText));
             return;
           }
           await this.reply(ctx, "Unknown command. Use `help`.");
@@ -397,7 +419,7 @@ export class SlackBridge {
       return;
     }
     if (this.isSkillLookupText(prompt)) {
-      await this.reply(ctx, this.renderSkills(prompt.slice(1)));
+      await this.replyWithBlocks(ctx, this.skillAssistMessage(prompt.slice(1), ctx.rawText));
       return;
     }
     if (await this.replyIfUnknownSkills(ctx, prompt)) return;
@@ -996,11 +1018,103 @@ export class SlackBridge {
     }
   }
 
+  private async replyWithBlocks(ctx: CommandContext, message: { text: string; blocks?: any[] }) {
+    if (ctx.isSlash && ctx.respond) {
+      await ctx.respond({ response_type: "ephemeral", text: message.text, blocks: message.blocks });
+      return;
+    }
+    if (ctx.threadTs) {
+      await ctx.client.chat.postMessage({ channel: ctx.channelId, thread_ts: ctx.threadTs, text: message.text, blocks: message.blocks });
+    } else {
+      await ctx.client.chat.postMessage({ channel: ctx.channelId, text: message.text, blocks: message.blocks });
+    }
+  }
+
   private async postThread(client: WebClient, channel: string, threadTs: string | undefined, text: string) {
     const chunks = splitForSlack(text, env.slackMaxMessageChars);
     for (const chunk of chunks) {
       await client.chat.postMessage({ channel, thread_ts: threadTs, text: chunk });
     }
+  }
+
+  private commandAssistMessage(query: string, language: LanguageCode): { text: string; blocks: any[] } {
+    return {
+      text: renderCommandSuggestions(query, language, env.commandPrefix),
+      blocks: commandPickerBlocks(language, query)
+    };
+  }
+
+  private skillAssistMessage(filter: string, rawText: string, token = `$${filter.replace(/^\$/, "")}`, leadText?: string): { text: string; blocks: any[] } {
+    const normalized = filter.replace(/^\$/, "").trim();
+    const text = [leadText, this.renderSkills(normalized)].filter(Boolean).join("\n\n");
+    const matchingSkills = this.skills.search(normalized);
+    const pickerSkills = matchingSkills.length > 0 || !normalized
+      ? matchingSkills
+      : this.skills.suggestionsFor(normalized, 100);
+    return {
+      text,
+      blocks: skillPickerBlocks(pickerSkills.slice(0, 100), normalized, rawText, token, text)
+    };
+  }
+
+  private async handleAssistAction(body: any, client: WebClient, respond?: (message: any) => Promise<any>) {
+    const action = body.actions?.[0];
+    const rawValue = action?.selected_option?.value ?? action?.value;
+    const value = parseAssistActionValue(rawValue);
+    const ctx = this.contextFromAction(body, client, respond);
+
+    if (!this.isAllowed(ctx.userId)) {
+      await this.reply(ctx, "Not allowed.");
+      return;
+    }
+
+    if (value.kind === "command" && value.command) {
+      await this.handleCommandSelect(ctx, value.command);
+      return;
+    }
+
+    if (value.kind === "skill" && value.rawText && value.token) {
+      const selected = action?.selected_option?.value ? parseAssistActionValue(action.selected_option.value) : value;
+      const skillName = selected.command;
+      if (!skillName) {
+        await this.reply(ctx, "No skill selected.");
+        return;
+      }
+      const nextRawText = replaceSkillToken(value.rawText, value.token, `$${skillName}`);
+      await this.handleCommand({ ...ctx, rawText: nextRawText });
+      return;
+    }
+  }
+
+  private async handleCommandSelect(ctx: CommandContext, command: string) {
+    const entry = COMMAND_HELP.find((item) => item.name === command || item.aliases?.includes(command));
+    if (!entry) {
+      await this.reply(ctx, `Unknown command: ${command}`);
+      return;
+    }
+    if (DIRECT_RUN_COMMANDS.has(entry.name)) {
+      await this.handleCommand({ ...ctx, rawText: entry.name });
+      return;
+    }
+
+    const language = this.currentLanguage(ctx);
+    const text = language === "ko"
+      ? [`선택한 명령어: ${codeInline(entry.name)}`, `형식: ${codeInline(entry.usage)}`, entry.ko, "", `예: ${codeInline(`${env.commandPrefix} ${entry.usage}`)}`].join("\n")
+      : [`Selected command: ${codeInline(entry.name)}`, `Usage: ${codeInline(entry.usage)}`, entry.en, "", `Example: ${codeInline(`${env.commandPrefix} ${entry.usage}`)}`].join("\n");
+    await this.reply(ctx, text);
+  }
+
+  private contextFromAction(body: any, client: WebClient, respond?: (message: any) => Promise<any>): CommandContext {
+    return {
+      userId: body.user?.id,
+      channelId: body.channel?.id ?? body.container?.channel_id,
+      threadTs: body.message?.thread_ts,
+      messageTs: body.message?.ts,
+      isSlash: Boolean(respond),
+      rawText: "",
+      client,
+      respond
+    };
   }
 
   private renderProjects(): string {
@@ -1035,6 +1149,12 @@ export class SlackBridge {
   }
 
   private async replyIfUnknownSkills(ctx: CommandContext, prompt: string): Promise<boolean> {
+    const completion = this.skillCompletionForPrompt(prompt);
+    if (completion) {
+      await this.replyWithBlocks(ctx, this.skillAssistMessage(completion.prefix, ctx.rawText, completion.token));
+      return true;
+    }
+
     if (!this.skills.isStrict()) return false;
     const unknown = this.skills.unknownSkillNames(prompt);
     if (unknown.length === 0) return false;
@@ -1045,13 +1165,118 @@ export class SlackBridge {
       }
       return `Unknown skill ${codeInline(`$${name}`)}. Did you mean ${suggestions.map((skill) => codeInline(`$${skill.name}`)).join(", ")}?`;
     });
+    const firstWithSuggestions = unknown.find((name) => this.skills.suggestionsFor(name).length > 0);
+    if (firstWithSuggestions) {
+      await this.replyWithBlocks(ctx, this.skillAssistMessage(firstWithSuggestions, ctx.rawText, `$${firstWithSuggestions}`, lines.join("\n")));
+      return true;
+    }
+
     await this.reply(ctx, lines.join("\n"));
     return true;
+  }
+
+  private skillCompletionForPrompt(prompt: string): { prefix: string; token: string } | undefined {
+    const tokenPattern = /(^|\s)(\$([A-Za-z0-9_.-]*))/g;
+    let match: RegExpExecArray | null;
+    while ((match = tokenPattern.exec(prompt)) !== null) {
+      const token = match[2];
+      const prefix = match[3] ?? "";
+      if (!prefix) return { prefix, token };
+      if (this.config.skills.has(prefix)) continue;
+      if (this.skills.search(prefix).length > 0) return { prefix, token };
+    }
+    return undefined;
   }
 }
 
 function codeInline(text: string): string {
   return `\`${String(text).replaceAll("`", "ʼ")}\``;
+}
+
+function commandPickerBlocks(language: LanguageCode, query: string): any[] {
+  const suggestions = commandSuggestions(query, 10);
+  const title = language === "ko" ? "명령어 완성 도우미" : "Command assistant";
+  const help = language === "ko"
+    ? "명령을 선택하세요. 인자가 필요 없는 명령은 바로 실행되고, 인자가 필요한 명령은 형식 도움을 보여줍니다."
+    : "Choose a command. Commands without required arguments run immediately; commands that need arguments show focused usage help.";
+  const options = COMMAND_HELP.map((entry) => ({
+    text: { type: "plain_text", text: optionLabel(`${entry.name} - ${language === "ko" ? entry.ko : entry.en}`) },
+    value: JSON.stringify({ kind: "command", command: entry.name } satisfies AssistActionValue)
+  }));
+
+  return [
+    { type: "section", text: { type: "mrkdwn", text: `*${title}*\n${help}` } },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: renderSuggestionPreview(suggestions, language) },
+      accessory: {
+        type: "static_select",
+        action_id: "codex_command_select",
+        placeholder: { type: "plain_text", text: language === "ko" ? "명령어 선택" : "Choose command" },
+        options
+      }
+    }
+  ];
+}
+
+function skillPickerBlocks(skills: SkillDef[], filter: string, rawText: string, token: string, fallbackText: string): any[] {
+  if (skills.length === 0) {
+    return [{ type: "section", text: { type: "mrkdwn", text: fallbackText } }];
+  }
+  const options = skills.map((skill) => ({
+    text: { type: "plain_text", text: optionLabel(`$${skill.name}${skill.description ? ` - ${skill.description}` : ""}`) },
+    value: JSON.stringify({ kind: "skill", command: skill.name, rawText, token } satisfies AssistActionValue)
+  }));
+  const title = filter ? `Skill matches for \`$${filter}\`` : "Configured skills";
+  const previewText = skills
+    .slice(0, 10)
+    .map((skill) => `- ${codeInline(`$${skill.name}`)}${skill.description ? ` - ${skill.description}` : ""}`)
+    .join("\n");
+
+  return [
+    { type: "section", text: { type: "mrkdwn", text: `*${title}*\n${previewText}` } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "static_select",
+          action_id: "codex_skill_select",
+          placeholder: { type: "plain_text", text: "Choose skill" },
+          options
+        }
+      ]
+    }
+  ];
+}
+
+function renderSuggestionPreview(suggestions: ReturnType<typeof commandSuggestions>, language: LanguageCode): string {
+  if (suggestions.length === 0) {
+    return language === "ko" ? "일치하는 명령어가 없습니다." : "No matching commands.";
+  }
+  return suggestions
+    .map(({ entry }) => `- ${codeInline(entry.usage)} - ${language === "ko" ? entry.ko : entry.en}`)
+    .join("\n");
+}
+
+function parseAssistActionValue(value: unknown): AssistActionValue {
+  if (typeof value !== "string") return { kind: "command" };
+  try {
+    const parsed = JSON.parse(value) as AssistActionValue;
+    return parsed && typeof parsed.kind === "string" ? parsed : { kind: "command" };
+  } catch {
+    return { kind: "command" };
+  }
+}
+
+function replaceSkillToken(rawText: string, token: string, replacement: string): string {
+  if (!token) return rawText;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return rawText.replace(new RegExp(`(^|\\s)${escaped}(?=\\s|$)`), (_, prefix: string) => `${prefix}${replacement}`);
+}
+
+function optionLabel(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= 75 ? compact : `${compact.slice(0, 72)}...`;
 }
 
 function normalizeSlackChannelName(name: string): string {

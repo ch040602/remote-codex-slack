@@ -11,6 +11,10 @@ This bridge uses Slack Socket Mode. It receives Slack events locally over the ap
 5. Create an app-level token with `connections:write`.
 6. Copy the `xapp-...` token to `.env` as `SLACK_APP_TOKEN`.
 
+## Enable Interactivity
+
+Open **Interactivity & Shortcuts** and enable interactivity. The bridge uses Block Kit action payloads for command and skill picker menus. With Socket Mode enabled, these action payloads are delivered to the local Bolt app over the app-level WebSocket connection.
+
 ## Configure Bot Permissions
 
 Add these bot token scopes under **OAuth & Permissions**:
@@ -103,7 +107,7 @@ To browse configured local skills before sending work:
 /codex skills example
 ```
 
-Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or `skills <prefix>` as a message to get the list or filtered matches.
+Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow.
 
 To browse command suggestions or recover from a partial command:
 
@@ -114,7 +118,15 @@ To browse command suggestions or recover from a partial command:
 !codex statu
 ```
 
-Suggestion text follows the current `language en|ko` setting.
+Suggestion text follows the current `language en|ko` setting. The response includes an interactive command menu: commands without required arguments run immediately, while commands that need arguments show focused usage help.
+
+Skill picker examples:
+
+```text
+/codex new inspect this repo with $
+/codex new inspect this repo with $exa
+!codex send fix tests with $
+```
 
 You can also create a project channel directly from Slack:
 

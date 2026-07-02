@@ -90,13 +90,14 @@ Use Socket Mode. You do not need to expose a public HTTP endpoint or use ngrok.
 2. Open **Socket Mode** and enable it.
 3. Create an app-level token with the `connections:write` scope.
 4. Put that token in `.env` as `SLACK_APP_TOKEN=xapp-...`.
-5. Open **OAuth & Permissions** and add the bot token scopes listed below.
-6. Install or reinstall the app to your Slack workspace.
-7. Copy the bot token into `.env` as `SLACK_BOT_TOKEN=xoxb-...`.
-8. Add your Slack user ID to `ALLOWED_SLACK_USER_IDS`.
-9. Add the slash command `/codex`.
-10. Run `npm run channels:create` to create project channels in that Slack workspace.
-11. Run `npm start`.
+5. Open **Interactivity & Shortcuts** and enable interactivity so command and skill picker menus can send actions back through Socket Mode.
+6. Open **OAuth & Permissions** and add the bot token scopes listed below.
+7. Install or reinstall the app to your Slack workspace.
+8. Copy the bot token into `.env` as `SLACK_BOT_TOKEN=xoxb-...`.
+9. Add your Slack user ID to `ALLOWED_SLACK_USER_IDS`.
+10. Add the slash command `/codex`.
+11. Run `npm run channels:create` to create project channels in that Slack workspace.
+12. Run `npm start`.
 
 Minimum recommended bot token scopes:
 
@@ -253,7 +254,7 @@ To browse local skills from Slack, send `$` or a prefix lookup:
 !codex skills test
 ```
 
-Slack bots cannot open a live popup while you are still typing in the message composer. The bridge therefore implements message-based lookup: send `$` to list all configured skills, or send `$prefix` / `skills <prefix>` to show matches before you submit a Codex command.
+Slack bots cannot open a live popup while you are still typing in the message composer. The bridge therefore implements message-based lookup: send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow.
 
 In CLI mode, the bridge embeds the referenced `SKILL.md` content into the prompt before calling `codex exec`. In app-server mode, the bridge sends Codex input like this:
 
@@ -268,7 +269,7 @@ When `STRICT_SKILL_REFERENCES=1`, unconfigured `$tokens` fail the command instea
 
 ## Command Suggestions
 
-Slack bots cannot provide dynamic autocomplete for normal message text, but the bridge recommends commands when you send a partial command or typo:
+Slack bots cannot read message-composer keystrokes before you send a message, so true live inline autocomplete is not available to bot apps. The bridge provides Slack-native command and skill picker menus after you send a partial command, typo, or `$` lookup:
 
 ```text
 /codex ?
@@ -278,7 +279,19 @@ Slack bots cannot provide dynamic autocomplete for normal message text, but the 
 !codex statu
 ```
 
-Suggestions follow the current `language en|ko` setting for the channel or thread. If a slash command such as `/codex pend` matches a command prefix, the bridge shows suggestions instead of creating a new channel named `pend`.
+Suggestions follow the current `language en|ko` setting for the channel or thread. If a slash command such as `/codex pend` matches a command prefix, the bridge shows an interactive command menu instead of creating a new channel named `pend`. Selecting a command with no required arguments runs it immediately; selecting a command that needs arguments shows focused usage help.
+
+Skill picker menus work the same way:
+
+```text
+/codex $
+/codex $rev
+/codex new inspect this repo with $
+/codex new inspect this repo with $rev
+!codex send fix tests with $
+```
+
+When a prompt contains `$` or an unfinished `$prefix`, the bridge shows matching configured skills. Choosing a skill replaces that token in the original command and continues the normal flow. Since commands queue by default, choosing a skill in `new` or `send` normally creates a pending command unless you included `-f`.
 
 ## Running
 
