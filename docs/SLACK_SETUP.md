@@ -140,6 +140,8 @@ To fork a recent session into another channel:
 
 `recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 
+For local Codex CLI sessions, `active` means the JSONL log has an unfinished turn or a currently running local `codex` process references that session ID. This also covers sessions you opened directly in a terminal.
+
 Command explanations are English by default. To switch a channel or thread to Korean:
 
 ```text

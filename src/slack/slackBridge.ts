@@ -849,7 +849,7 @@ export class SlackBridge {
           threadTs: "",
           cwd: session.cwd,
           codexThreadId: session.id,
-          status: "idle",
+          status: session.status,
           lastPrompt: session.lastPrompt,
           lastFinalAnswer: session.lastFinalAnswer,
           title: session.title,

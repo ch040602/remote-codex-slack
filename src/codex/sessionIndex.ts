@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 export interface CodexCliSessionSummary {
   id: string;
   cwd: string;
+  status: "idle" | "active";
   createdAt: string;
   updatedAt: string;
   path: string;
@@ -16,6 +18,8 @@ export interface CodexCliSessionSummary {
 export interface CodexCliSessionListOptions {
   sessionsDir?: string;
   limit?: number;
+  activeSessionIds?: Iterable<string>;
+  detectActiveProcesses?: boolean;
 }
 
 export function defaultCodexSessionsDir(): string {
@@ -26,24 +30,31 @@ export function listCodexCliSessions(options: CodexCliSessionListOptions = {}): 
   const sessionsDir = options.sessionsDir ?? defaultCodexSessionsDir();
   const limit = options.limit ?? 50;
   if (!fs.existsSync(sessionsDir)) return [];
+  const activeSessionIds = new Set(Array.from(options.activeSessionIds ?? [], (id) => id.toLowerCase()));
+  if (options.detectActiveProcesses !== false) {
+    for (const id of detectActiveCodexCliSessionIds()) activeSessionIds.add(id);
+  }
 
   return findSessionFiles(sessionsDir)
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
     .slice(0, Math.max(limit * 4, limit))
-    .map((entry) => readCodexCliSession(entry.path, entry.mtime))
+    .map((entry) => readCodexCliSession(entry.path, entry.mtime, activeSessionIds))
     .filter((session): session is CodexCliSessionSummary => Boolean(session))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .filter(uniqueSessionId())
     .slice(0, limit);
 }
 
-export function readCodexCliSession(filePath: string, fallbackMtime = new Date()): CodexCliSessionSummary | undefined {
+export function readCodexCliSession(filePath: string, fallbackMtime = new Date(), activeSessionIds: ReadonlySet<string> = new Set()): CodexCliSessionSummary | undefined {
   let id = sessionIdFromFilename(filePath);
   let cwd = "";
   let createdAt = fallbackMtime.toISOString();
-  let updatedAt = fallbackMtime.toISOString();
+  let updatedAt = "";
   let firstUserPrompt = "";
   let lastPrompt = "";
   let lastFinalAnswer = "";
+  let lastTaskStartedAt = "";
+  let lastTaskCompletedAt = "";
 
   const content = fs.readFileSync(filePath, "utf8");
   for (const line of content.split(/\r?\n/)) {
@@ -72,6 +83,15 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
     }
 
     const payload = event.payload ?? {};
+    if (event.type === "event_msg" && payload.type === "task_started") {
+      lastTaskStartedAt = timestamp ?? (updatedAt || fallbackMtime.toISOString());
+      continue;
+    }
+    if (event.type === "event_msg" && payload.type === "task_complete") {
+      lastTaskCompletedAt = timestamp ?? (updatedAt || fallbackMtime.toISOString());
+      continue;
+    }
+
     if (payload.type === "message" && payload.role === "user") {
       const text = extractText(payload.content);
       if (text) {
@@ -103,16 +123,34 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
   }
 
   if (!id || !cwd) return undefined;
+  const finalUpdatedAt = updatedAt || fallbackMtime.toISOString();
+  const hasOpenTurn = Boolean(lastTaskStartedAt && (!lastTaskCompletedAt || lastTaskStartedAt.localeCompare(lastTaskCompletedAt) > 0));
+  const hasOpenCliProcess = activeSessionIds.has(id.toLowerCase());
   return {
     id,
     cwd,
+    status: hasOpenTurn || hasOpenCliProcess ? "active" : "idle",
     createdAt,
-    updatedAt,
+    updatedAt: finalUpdatedAt,
     path: filePath,
     title: firstUserPrompt ? preview(firstUserPrompt, 80) : undefined,
     lastPrompt: lastPrompt || undefined,
     lastFinalAnswer: lastFinalAnswer || undefined
   };
+}
+
+export function detectActiveCodexCliSessionIds(): Set<string> {
+  return extractCodexSessionIdsFromProcessOutput(readProcessCommandLines());
+}
+
+export function extractCodexSessionIdsFromProcessOutput(output: string): Set<string> {
+  const active = new Set<string>();
+  const sessionId = /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = sessionId.exec(output)) !== null) {
+    active.add(match[1].toLowerCase());
+  }
+  return active;
 }
 
 function findSessionFiles(root: string): Array<{ path: string; mtime: Date; mtimeMs: number }> {
@@ -139,6 +177,16 @@ function findSessionFiles(root: string): Array<{ path: string; mtime: Date; mtim
   return result;
 }
 
+function uniqueSessionId(): (session: CodexCliSessionSummary) => boolean {
+  const seen = new Set<string>();
+  return (session) => {
+    const id = session.id.toLowerCase();
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  };
+}
+
 function extractText(value: unknown): string {
   if (!value) return "";
   if (typeof value === "string") return value.trim();
@@ -156,6 +204,50 @@ function extractText(value: unknown): string {
     if (text) return text;
   }
   return "";
+}
+
+function readProcessCommandLines(): string {
+  try {
+    if (process.platform === "win32") {
+      const powershellOutput = readWindowsProcessCommandLinesWithPowerShell();
+      if (powershellOutput) return powershellOutput;
+      return readWindowsProcessCommandLinesWithWmic();
+    }
+    return execFileSync("ps", ["-axo", "command"], { encoding: "utf8", timeout: 8000 })
+      .split(/\r?\n/)
+      .filter((line) => /codex/i.test(line))
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function readWindowsProcessCommandLinesWithPowerShell(): string {
+  try {
+    return execFileSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process -Filter \"CommandLine LIKE '%codex%'\" | Select-Object -ExpandProperty CommandLine"
+      ],
+      { encoding: "utf8", timeout: 8000, windowsHide: true }
+    );
+  } catch {
+    return "";
+  }
+}
+
+function readWindowsProcessCommandLinesWithWmic(): string {
+  try {
+    return execFileSync(
+      "wmic.exe",
+      ["process", "get", "CommandLine", "/value"],
+      { encoding: "utf8", timeout: 8000, windowsHide: true }
+    );
+  } catch {
+    return "";
+  }
 }
 
 function sessionIdFromFilename(filePath: string): string | undefined {

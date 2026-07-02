@@ -564,6 +564,8 @@ Explore recent sessions:
 
 The list includes Slack-created sessions and existing local Codex CLI sessions from `CODEX_SESSIONS_DIR`. Each entry shows the Codex session ID, status, working path, Slack thread when already bound, last prompt, and last response preview.
 
+For local Codex CLI sessions, `active` means the JSONL log has an unfinished turn or a currently running local `codex` process references that session ID. This includes Codex sessions you opened directly in a terminal, even if they were not started through Slack.
+
 Rerun the last stored prompt:
 
 ```text
