@@ -31,6 +31,7 @@ export const env = {
   navigationRoot: process.env.CODEX_NAV_ROOT ?? path.join(os.homedir(), "Desktop"),
   codexDriver: process.env.CODEX_DRIVER ?? "cli",
   codexBin: process.env.CODEX_BIN ?? "codex",
+  codexSessionsDir: process.env.CODEX_SESSIONS_DIR ?? path.join(os.homedir(), ".codex", "sessions"),
   codexModel: process.env.CODEX_MODEL ?? "",
   codexSandbox: process.env.CODEX_SANDBOX ?? "workspaceWrite",
   codexApprovalPolicy: process.env.CODEX_APPROVAL_POLICY ?? "never",

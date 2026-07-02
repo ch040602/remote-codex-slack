@@ -80,6 +80,7 @@ Use CLI mode unless you explicitly need the experimental app-server driver:
 ```env
 CODEX_DRIVER=cli
 CODEX_BIN=codex
+CODEX_SESSIONS_DIR=%USERPROFILE%/.codex/sessions
 ```
 
 ```bash
@@ -125,6 +126,8 @@ To fork a recent session into another channel:
 ```text
 /codex recent --channel api-followup 1
 ```
+
+`recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 
 Command explanations are English by default. To switch a channel or thread to Korean:
 

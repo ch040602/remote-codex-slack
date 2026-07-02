@@ -144,6 +144,7 @@ SLACK_COMMAND_PREFIX=!codex
 
 CODEX_BIN=codex
 CODEX_DRIVER=cli
+CODEX_SESSIONS_DIR=%USERPROFILE%/.codex/sessions
 CODEX_SANDBOX=workspaceWrite
 CODEX_APPROVAL_POLICY=never
 
@@ -547,7 +548,7 @@ Explore recent sessions:
 !codex sessions
 ```
 
-The list includes the Codex session ID, status, working path, Slack thread, last prompt, and last response preview.
+The list includes Slack-created sessions and existing local Codex CLI sessions from `CODEX_SESSIONS_DIR`. Each entry shows the Codex session ID, status, working path, Slack thread when already bound, last prompt, and last response preview.
 
 Rerun the last stored prompt:
 

@@ -6,6 +6,7 @@ import type { BridgeConfig } from "../config.js";
 import type { PathResolver, ResolvedWorkspace } from "../core/pathResolver.js";
 import type { LanguageCode, PendingCommand, Store, SlackThreadBinding } from "../core/store.js";
 import type { SkillRegistry } from "../core/skills.js";
+import { listCodexCliSessions } from "../codex/sessionIndex.js";
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
@@ -429,11 +430,15 @@ export class SlackBridge {
       await this.reply(ctx, "Usage: `resume <codexThreadId|last> [prompt]`");
       return;
     }
-    const latest = this.store.findLatestForChannel(ctx.channelId);
-    const codexThreadId = threadId === "last" ? latest?.codexThreadId : threadId;
+    const selected = this.resolveRecentSession(ctx, threadId, false);
+    const codexThreadId = threadId === "last" ? selected?.codexThreadId : selected?.codexThreadId ?? threadId;
     if (!codexThreadId) throw new Error("No last Codex thread found for this channel");
 
-    const workspace = this.workspaceFromCommandOrContext(ctx, cmd);
+    const workspace = optionString(cmd, "cwd", "project", "workspace")
+      ? this.workspaceFromCommandOrContext(ctx, cmd)
+      : selected
+        ? { cwd: selected.cwd, projectName: selected.projectName }
+        : this.workspaceFromCommandOrContext(ctx, cmd);
     const threadContext = await this.ensureSlackThread(ctx, `Codex resumed: ${codexThreadId}`);
     const key = this.store.threadKey(threadContext.channelId, threadContext.threadTs);
     const binding = await this.codex.resumeThread({
@@ -506,36 +511,38 @@ export class SlackBridge {
 
   private async startRerun(ctx: CommandContext, binding: SlackThreadBinding, prompt: string, selectorLabel?: string) {
     if (!binding.codexThreadId) throw new Error("No Codex session to rerun. Use `new` first.");
+    const codexThreadId = binding.codexThreadId;
+    const target = await this.materializeSessionBinding(ctx, binding);
     const resumed = await this.codex.resumeThread({
-      slackKey: binding.key,
-      channelId: binding.channelId,
-      threadTs: binding.threadTs,
-      codexThreadId: binding.codexThreadId,
-      cwd: binding.cwd,
-      projectName: binding.projectName,
+      slackKey: target.key,
+      channelId: target.channelId,
+      threadTs: target.threadTs,
+      codexThreadId,
+      cwd: target.cwd,
+      projectName: target.projectName,
       createdBy: ctx.userId
     });
     const { turnId, referencedSkills } = await this.codex.startTurn(resumed, prompt);
-    await this.postThread(ctx.client, binding.channelId, binding.threadTs, [
+    await this.postThread(ctx.client, target.channelId, target.threadTs, [
       `Rerun started as turn ${codeInline(turnId)}${selectorLabel ? ` from ${codeInline(selectorLabel)}` : ""}.`,
-      `cwd: ${codeInline(binding.cwd)}`,
+      `cwd: ${codeInline(target.cwd)}`,
       binding.lastFinalAnswer ? `previous last response: ${preview(binding.lastFinalAnswer, 500)}` : undefined,
       referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
     ].filter(Boolean).join("\n"));
   }
 
   private async handleSessions(ctx: CommandContext, cmd: ParsedCommand) {
-    const local = this.store.listThreads(15);
-    if (local.length === 0) {
-      await this.reply(ctx, "No local Slack/Codex bindings yet.");
+    const recent = this.listRecentSessions(15);
+    if (recent.length === 0) {
+      await this.reply(ctx, "No Codex sessions found.");
       return;
     }
     const newChannelName = optionString(cmd, "channel");
     if (newChannelName) {
-      await this.createChannelFromRecent(ctx, cmd, newChannelName, local);
+      await this.createChannelFromRecent(ctx, cmd, newChannelName, recent);
       return;
     }
-    const lines = local.map((s, index) => {
+    const lines = recent.map((s, index) => {
       return renderRecentSession(s, index);
     });
     const language = this.currentLanguage(ctx);
@@ -790,7 +797,7 @@ export class SlackBridge {
   }
 
   private resolveRecentSession(ctx: CommandContext, selector: string, throwOnMissing = true): SlackThreadBinding | undefined {
-    const recent = this.store.listThreads(50).filter((s) => s.codexThreadId);
+    const recent = this.listRecentSessions(50);
     let binding: SlackThreadBinding | undefined;
 
     if (selector === "last") {
@@ -805,6 +812,47 @@ export class SlackBridge {
       throw new Error(`No recent Codex session found for selector: ${selector}`);
     }
     return binding;
+  }
+
+  private listRecentSessions(limit: number): SlackThreadBinding[] {
+    const local = this.store.listThreads(limit).filter((session) => session.codexThreadId);
+    const seen = new Set(local.map((session) => session.codexThreadId).filter(Boolean));
+    let external: SlackThreadBinding[] = [];
+    try {
+      external = listCodexCliSessions({ sessionsDir: env.codexSessionsDir, limit })
+        .filter((session) => !seen.has(session.id))
+        .map((session) => ({
+          key: `codex-cli:${session.id}`,
+          channelId: "",
+          threadTs: "",
+          cwd: session.cwd,
+          codexThreadId: session.id,
+          status: "idle",
+          lastPrompt: session.lastPrompt,
+          lastFinalAnswer: session.lastFinalAnswer,
+          title: session.title,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          createdBy: "codex-cli"
+        }));
+    } catch (error) {
+      logger.warn("failed to read Codex CLI sessions", { sessionsDir: env.codexSessionsDir, error: String(error) });
+    }
+    return [...local, ...external]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit);
+  }
+
+  private async materializeSessionBinding(ctx: CommandContext, binding: SlackThreadBinding): Promise<SlackThreadBinding> {
+    if (binding.channelId && binding.threadTs && !binding.key.startsWith("codex-cli:")) return binding;
+    const threadContext = await this.ensureSlackThread(ctx, `Codex resumed: ${binding.codexThreadId}`);
+    return {
+      ...binding,
+      key: this.store.threadKey(threadContext.channelId, threadContext.threadTs),
+      channelId: threadContext.channelId,
+      threadTs: threadContext.threadTs,
+      createdBy: ctx.userId
+    };
   }
 
   private async createChannelFromRecent(ctx: CommandContext, cmd: ParsedCommand, channelNameRaw: string, recent: SlackThreadBinding[]) {
@@ -1008,8 +1056,9 @@ function renderRecentSession(session: SlackThreadBinding, index: number): string
   return [
     `${index + 1}. ${codeInline(session.codexThreadId ?? "unbound")} ${codeInline(session.status)}`,
     `   cwd: ${session.cwd}`,
+    session.key.startsWith("codex-cli:") ? "   source: local Codex CLI session" : undefined,
     session.projectName ? `   project: ${session.projectName}` : undefined,
-    `   slack: ${session.channelId}:${session.threadTs}`,
+    session.channelId && session.threadTs ? `   slack: ${session.channelId}:${session.threadTs}` : undefined,
     session.lastPrompt ? `   last prompt: ${preview(session.lastPrompt, 160)}` : undefined,
     session.lastFinalAnswer ? `   last response: ${preview(session.lastFinalAnswer, 300)}` : "   last response: (none yet)"
   ]
@@ -1075,7 +1124,7 @@ function helpText(prefix: string, language: LanguageCode): string {
   steer <prompt>                  실행 중인 active turn에만 추가 입력합니다.
   resume <codexThreadId|last> [prompt]
   rerun [number|codexThreadId|last] [prompt]
-  recent                           cwd와 마지막 응답이 포함된 최근 세션을 봅니다.
+  recent                           Slack/로컬 Codex CLI 최근 세션을 봅니다.
   recent --channel <name> [number] 최근 세션 cwd/session을 새 channel에 연결합니다.
   sessions                         recent 별칭입니다.
   rerun-session <number|codexThreadId|last> [prompt]
@@ -1120,7 +1169,7 @@ function helpText(prefix: string, language: LanguageCode): string {
   steer <prompt>                  Add input to active in-flight turn only.
   resume <codexThreadId|last> [prompt]
   rerun [number|codexThreadId|last] [prompt]
-  recent                           Show recent sessions with cwd and last response.
+  recent                           Show Slack and local Codex CLI recent sessions.
   recent --channel <name> [number] Create/link a channel from a recent session cwd/session.
   sessions                         Alias for recent.
   rerun-session <number|codexThreadId|last> [prompt]
