@@ -17,10 +17,20 @@ describe("command parser", () => {
     const cmd = parseCommand("fix the bug");
     expect(cmd.name).toBe("send");
     expect(cmd.rawArgs).toBe("fix the bug");
+    expect(cmd.implicitSend).toBe(true);
 
     const skill = parseCommand("$review fix the bug");
     expect(skill.name).toBe("send");
     expect(skill.rawArgs).toBe("$review fix the bug");
+    expect(skill.implicitSend).toBe(true);
+  });
+
+  it("keeps explicit send distinct from implicit send shortcuts", () => {
+    const cmd = parseCommand("send status");
+    expect(cmd.name).toBe("send");
+    expect(cmd.args).toEqual(["status"]);
+    expect(cmd.rawArgs).toBe("status");
+    expect(cmd.implicitSend).toBe(false);
   });
 
   it("strips command prefix", () => {

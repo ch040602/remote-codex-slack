@@ -77,12 +77,12 @@ export function parseCommand(text: string): ParsedCommand {
 
   if (!KNOWN.has(candidate)) {
     // Plain mention/DM text means "send".
-    return { name: "send", args: [], rawArgs: trimmed, options: {} };
+    return { name: "send", args: [], rawArgs: trimmed, options: {}, implicitSend: true };
   }
 
   const rawArgs = trimmed.slice(head.length).trim();
   const { args, options } = parseOptions(restTokens);
-  return { name: candidate, args, rawArgs, options };
+  return { name: candidate, args, rawArgs, options, implicitSend: false };
 }
 
 export function tokenize(input: string): string[] {

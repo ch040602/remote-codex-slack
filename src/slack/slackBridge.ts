@@ -296,7 +296,7 @@ export class SlackBridge {
   private commandLookup(_ctx: CommandContext, parsed: ParsedCommand): CommandLookupResult | undefined {
     if (_ctx.bypassCommandLookup) return undefined;
     const raw = parsed.rawArgs.trim();
-    if (parsed.name !== "send") return undefined;
+    if (parsed.name !== "send" || !parsed.implicitSend) return undefined;
     if (!raw || raw.startsWith("$")) return undefined;
     if (raw === "?") return { query: "", suggestions: commandSuggestions("", 10) };
 
@@ -1620,7 +1620,7 @@ export class SlackBridge {
   }
 
   private isChannelCreationShortcut(ctx: CommandContext, parsed: ParsedCommand): boolean {
-    if (!ctx.isSlash || parsed.name !== "send") return false;
+    if (!ctx.isSlash || parsed.name !== "send" || !parsed.implicitSend) return false;
     const raw = parsed.rawArgs.trim();
     return /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,78}$/.test(raw);
   }

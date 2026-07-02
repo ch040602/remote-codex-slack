@@ -39,4 +39,5 @@ export interface ParsedCommand {
   args: string[];
   rawArgs: string;
   options: Record<string, string | boolean>;
+  implicitSend?: boolean;
 }
