@@ -1768,7 +1768,7 @@ export class SlackBridge {
       channelId: body.channel?.id ?? body.container?.channel_id,
       threadTs: body.message?.thread_ts ?? body.container?.thread_ts,
       messageTs: body.message?.ts ?? body.container?.message_ts,
-      isSlash: Boolean(respond),
+      isSlash: false,
       rawText: "",
       client,
       respond
