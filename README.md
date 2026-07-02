@@ -96,7 +96,7 @@ Use Socket Mode. You do not need to expose a public HTTP endpoint or use ngrok.
 8. Add your Slack user ID to `ALLOWED_SLACK_USER_IDS`.
 9. Add the slash command `/codex`.
 10. Run `npm run channels:create` to create project channels in that Slack workspace.
-11. Run `npm run dev`.
+11. Run `npm start`.
 
 Minimum recommended bot token scopes:
 
@@ -282,19 +282,26 @@ Suggestions follow the current `language en|ko` setting for the channel or threa
 
 ## Running
 
-Development:
+Default background mode:
+
+```bash
+npm start
+```
+
+Development foreground mode:
 
 ```bash
 npm run dev
 ```
 
-Windows:
+Built foreground mode:
 
-```powershell
-.\scripts\windows-start.ps1
+```bash
+npm run build
+npm run start:fg
 ```
 
-Windows background mode:
+Windows background controls:
 
 ```powershell
 npm run win:bg:start
@@ -302,7 +309,7 @@ npm run win:bg:status
 npm run win:bg:stop
 ```
 
-Background mode hides the terminal window and writes logs to `data/bridge.log`. It does not create a tray icon; use `win:bg:status` or Slack `/codex pwd` to confirm the bridge is running.
+`npm start` uses the Windows background launcher by default. Background mode hides the terminal window and writes logs to `data/bridge.log`. It does not create a tray icon; use `win:bg:status` or Slack `/codex pwd` to confirm the bridge is running.
 
 Install a Windows scheduled task for logon startup:
 
@@ -373,10 +380,10 @@ This creates or reuses `#api-followup`, binds it to the recent session cwd, and 
 
 Use this when you are at the machine that runs Codex:
 
-1. Start the bridge:
+1. Start the bridge in the background:
 
 ```bash
-npm run dev
+npm start
 ```
 
 2. Open Slack desktop or Slack web.

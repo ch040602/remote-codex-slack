@@ -6,7 +6,8 @@
   "private": true,
   "scripts": {
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
+    "start": "npm run win:bg:start",
+    "start:fg": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",

@@ -84,7 +84,7 @@ CODEX_SESSIONS_DIR=%USERPROFILE%/.codex/sessions
 ```
 
 ```bash
-npm run dev
+npm start
 ```
 
 Then in Slack:
@@ -172,7 +172,7 @@ codex exec --json --skip-git-repo-check -C <workspace> -
 
 ## Use From PC
 
-1. Keep the terminal running `npm run dev`.
+1. Keep the PC bridge running with `npm start`.
 2. Open Slack desktop or Slack web.
 3. Bind the project channel:
 
