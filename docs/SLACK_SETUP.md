@@ -55,6 +55,8 @@ Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | bind-session | new 
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
 
+After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` and queued for Codex by default. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
+
 ## Connect Channels To Projects
 
 Use one of these options:
@@ -109,7 +111,7 @@ $example summarize this repository
 /codex skills example
 ```
 
-Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow. A channel message that starts with `$skill` is treated as a Codex skill command even without `!codex send`.
+Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow. Since normal channel messages are Codex input, a channel message that starts with `$skill` is treated as a Codex skill prompt even without `!codex send`.
 
 To browse command suggestions or recover from a partial command:
 
@@ -128,7 +130,10 @@ Skill picker examples:
 /codex new inspect this repo with $
 /codex new inspect this repo with $exa
 !codex send fix tests with $
+fix tests with $exa
 ```
+
+Normal bound-channel messages also participate in this flow. Sending `/codex pwd` runs a bot command instead of forwarding `/codex pwd` to Codex.
 
 You can also create a project channel directly from Slack:
 
@@ -167,7 +172,7 @@ To bind the current channel or thread to a recent session:
 /codex bind-session 2
 ```
 
-Without an argument, `bind-session` shows a picker. After binding, `send`, `$skill ...`, or prefixed messages continue that Codex session.
+Without an argument, `bind-session` shows a picker. After binding, normal channel messages, `send`, `$skill ...`, or prefixed messages continue that Codex session.
 
 `recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 

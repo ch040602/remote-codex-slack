@@ -13,6 +13,7 @@ No source code from those repositories is copied here. This bridge is also diffe
 
 - Bind a Slack channel or Slack thread to a local workspace.
 - Change the Codex `cwd` with project aliases or allowed local paths.
+- Treat normal messages in a bound channel as Codex session input.
 - Start a fresh Codex thread from Slack.
 - Send follow-up prompts to the current Codex session.
 - Steer an active in-flight turn.
@@ -31,6 +32,7 @@ No source code from those repositories is copied here. This bridge is also diffe
 Slack desktop/mobile
   |-- /codex slash command
   |-- @bot mention
+  |-- normal channel message
   `-- !codex message prefix
         |
         v
@@ -132,6 +134,8 @@ Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | bind-session | new 
 ```
 
 Slack slash commands do not execute inside threads. Use an `@bot` mention or the configured message prefix inside threads.
+
+After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` and queued for Codex by default. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
 
 ## Environment
 
@@ -247,7 +251,7 @@ $test-fixer fix the failing CI tests
 !codex send $test-fixer fix the failing CI tests
 ```
 
-In channels where the bot is present, a message that starts with `$` is treated as a Codex skill command even without `!codex send`. Send `$` or `$prefix` by itself to open the skill picker.
+In channels where the bot is present, every normal message is treated as Codex input without `!codex send`. A message that starts with `$skill` is therefore queued as a Codex skill prompt. Send `$` or `$prefix` by itself to open the skill picker.
 
 To browse local skills from Slack, send `$` or a prefix lookup:
 
@@ -274,7 +278,7 @@ When `STRICT_SKILL_REFERENCES=1`, unconfigured `$tokens` fail the command instea
 
 ## Command Suggestions
 
-Slack bots cannot read message-composer keystrokes before you send a message, so true live inline autocomplete is not available to bot apps. The bridge provides Slack-native command and skill picker menus after you send a partial command, typo, or `$` lookup:
+Slack bots cannot read message-composer keystrokes before you send a message, so true live inline `$` autocomplete in the normal Slack composer is not available to bot apps. The `/codex` slash command can show Slack's configured usage hint while typing, and the bridge provides Slack-native command and skill picker menus after you send a partial command, typo, or `$` lookup:
 
 ```text
 /codex ?
@@ -297,6 +301,8 @@ Skill picker menus work the same way:
 ```
 
 When a prompt contains `$` or an unfinished `$prefix`, the bridge shows matching configured skills. Choosing a skill replaces that token in the original command and continues the normal flow. Since commands queue by default, choosing a skill in `new` or `send` normally creates a pending command unless you included `-f`.
+
+Normal bound-channel messages also participate in this flow. For example, sending `fix tests with $rev` opens the skill picker for `$rev`; sending `/codex pwd` runs a bot command instead of forwarding `/codex pwd` to Codex.
 
 ## Running
 

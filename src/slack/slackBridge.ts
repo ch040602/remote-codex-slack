@@ -10,7 +10,7 @@ import { listCodexCliSessions, type CodexCliSessionCommand } from "../codex/sess
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-import { commandTarget, hasOption, optionString, parseCommand, stripBotMention, stripPrefix } from "../commands/parser.js";
+import { commandTarget, hasOption, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
 import { COMMAND_HELP, commandSuggestions, hasCommandSuggestion, renderCommandSuggestions } from "../commands/catalog.js";
 import type { ParsedCommand } from "../commands/types.js";
 import { splitForSlack, codeBlock } from "./messageUtils.js";
@@ -94,17 +94,15 @@ export class SlackBridge {
     this.app.message(async ({ message, client }) => {
       const msg = message as { bot_id?: string; text?: string; user?: string; channel: string; channel_type?: string; thread_ts?: string; ts: string };
       if (msg.bot_id || !msg.text || !msg.user) return;
-      const prefixed = stripPrefix(msg.text, env.commandPrefix);
-      const isDirectMessage = msg.channel_type === "im";
-      const skillShortcut = prefixed === undefined && this.isSkillPrefixedMessage(msg.text);
-      if (prefixed === undefined && !isDirectMessage && !skillShortcut) return;
+      const rawText = normalizeSlackMessageText(msg.text, env.commandPrefix, msg.channel_type === "im");
+      if (rawText === undefined) return;
       await this.handleCommand({
         userId: msg.user,
         channelId: msg.channel,
         threadTs: msg.thread_ts ?? msg.ts,
         messageTs: msg.ts,
         isSlash: false,
-        rawText: prefixed ?? msg.text.trim(),
+        rawText,
         client
       });
     });
@@ -1058,7 +1056,7 @@ export class SlackBridge {
         `Channel linked from recent session ${codeInline(session.codexThreadId)}.`,
         `cwd: ${codeInline(session.cwd)}`,
         session.lastFinalAnswer ? `last response: ${preview(session.lastFinalAnswer, 500)}` : undefined,
-        "Use `/codex send ...` or `!codex send ...` here to continue. Commands queue by default; add `-f` to execute immediately."
+        "Send a normal channel message here to continue the session. Messages queue by default; use `/codex send -f ...` or `!codex send -f ...` to execute immediately."
       ].filter(Boolean).join("\n")
     });
     if (posted.ts) {
@@ -1118,7 +1116,7 @@ export class SlackBridge {
     await this.postThread(ctx.client, threadContext.channelId, threadContext.threadTs, [
       `Bound this ${ctx.threadTs ? "thread" : "channel"} to Codex session ${codeInline(session.codexThreadId)}.`,
       `cwd: ${codeInline(session.cwd)}`,
-      "Messages sent here with `send`, `$skill ...`, or the configured prefix continue this session."
+      "Normal channel messages, `send`, `$skill ...`, and prefixed messages continue this session. Messages starting with `/` stay Slack bot commands."
     ].join("\n"));
   }
 
@@ -1328,10 +1326,6 @@ export class SlackBridge {
 
   private isSkillLookupText(text: string): boolean {
     return /^\$[A-Za-z0-9_.-]*$/.test(text.trim());
-  }
-
-  private isSkillPrefixedMessage(text: string): boolean {
-    return /^\$[A-Za-z0-9_.-]*(\s|$)/.test(text.trim());
   }
 
   private async replyIfUnknownSkills(ctx: CommandContext, prompt: string): Promise<boolean> {
@@ -1609,7 +1603,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: 대기 명령 관리",
       "- `language en|ko`: 안내 언어 변경",
       "",
-      `기본은 대기열 저장입니다. 즉시 실행하려면 \`-f\`를 붙이세요. Thread에서는 \`${prefix}\` 또는 @bot을 사용하세요.`
+      `일반 채널 메시지는 현재 세션 입력으로 대기열에 저장됩니다. 즉시 실행하려면 \`-f\`를 붙이세요. \`/\`로 시작하는 입력은 Slack bot command로만 처리됩니다. Thread에서는 \`${prefix}\` 또는 @bot을 사용하세요.`
     ].join("\n");
   }
 
@@ -1630,6 +1624,6 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: manage queued commands",
     "- `language en|ko`: change help language",
     "",
-    `Commands queue by default. Add \`-f\` to run immediately. In threads, use \`${prefix}\` or @bot.`
+    `Normal channel messages queue as current-session input by default. Add \`-f\` to run immediately. Messages starting with \`/\` stay Slack bot commands. In threads, use \`${prefix}\` or @bot.`
   ].join("\n");
 }

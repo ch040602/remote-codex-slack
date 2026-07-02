@@ -49,6 +49,15 @@ export function stripPrefix(text: string, prefix: string): string | undefined {
   return undefined;
 }
 
+export function normalizeSlackMessageText(text: string, commandPrefix: string, isDirectMessage: boolean): string | undefined {
+  const prefixed = stripPrefix(text, commandPrefix);
+  if (prefixed !== undefined) return prefixed;
+
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.startsWith("/")) return undefined;
+  return isDirectMessage ? trimmed : `send ${trimmed}`;
+}
+
 export function parseCommand(text: string): ParsedCommand {
   const trimmed = text.trim();
   if (!trimmed) return { name: "help", args: [], rawArgs: "", options: {} };

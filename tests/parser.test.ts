@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandTarget, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
+import { commandTarget, normalizeSlackMessageText, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
 
 describe("command parser", () => {
   it("tokenizes quoted args", () => {
@@ -82,5 +82,13 @@ describe("command parser", () => {
     expect(recent.name).toBe("recent");
     expect(recent.options.channel).toBe("api-copy");
     expect(recent.args).toEqual(["2"]);
+  });
+
+  it("normalizes Slack channel messages into Codex send commands", () => {
+    expect(normalizeSlackMessageText("pwd", "!codex", false)).toBe("send pwd");
+    expect(normalizeSlackMessageText("$review inspect", "!codex", false)).toBe("send $review inspect");
+    expect(normalizeSlackMessageText("!codex pwd", "!codex", false)).toBe("pwd");
+    expect(normalizeSlackMessageText("/codex pwd", "!codex", false)).toBeUndefined();
+    expect(normalizeSlackMessageText("/codex pwd", "!codex", true)).toBeUndefined();
   });
 });
