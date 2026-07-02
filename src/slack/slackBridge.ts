@@ -28,13 +28,14 @@ interface CommandContext {
 }
 
 interface AssistActionValue {
-  kind: "command" | "skill";
+  kind: "command" | "skill" | "bind-session";
   command?: string;
   rawText?: string;
+  sessionId?: string;
   token?: string;
 }
 
-const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status"]);
+const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session"]);
 
 export class SlackBridge {
   readonly app: App;
@@ -117,6 +118,11 @@ export class SlackBridge {
       await ack();
       await this.handleAssistAction(body, client, respond);
     });
+
+    this.app.action("codex_session_bind_select", async ({ ack, body, client, respond }: any) => {
+      await ack();
+      await this.handleAssistAction(body, client, respond);
+    });
   }
 
   private async handleCommand(ctx: CommandContext) {
@@ -173,6 +179,9 @@ export class SlackBridge {
           return;
         case "bind-channel":
           await this.handleBindChannel(ctx, parsed);
+          return;
+        case "bind-session":
+          await this.handleBindSession(ctx, parsed);
           return;
         case "unbind-channel":
           this.store.removeChannelBinding(ctx.channelId);
@@ -346,6 +355,26 @@ export class SlackBridge {
       updatedBy: ctx.userId
     });
     await this.reply(ctx, `Channel is now bound to ${resolved.projectName ? `project ${codeInline(resolved.projectName)}` : "workspace"}: ${codeInline(resolved.cwd)}`);
+  }
+
+  private async handleBindSession(ctx: CommandContext, cmd: ParsedCommand) {
+    const selector = cmd.args[0];
+    const recent = this.listRecentSessions(15);
+    if (recent.length === 0) {
+      await this.reply(ctx, "No Codex sessions found.");
+      return;
+    }
+    if (!selector) {
+      await this.replyWithBlocks(ctx, {
+        text: renderBindSessionList(recent, this.currentLanguage(ctx)),
+        blocks: bindSessionPickerBlocks(recent, this.currentLanguage(ctx))
+      });
+      return;
+    }
+
+    const session = this.resolveRecentSession(ctx, selector);
+    if (!session) throw new Error(`No recent Codex session found for selector: ${selector}`);
+    await this.bindSessionToHere(ctx, session);
   }
 
   private async handlePwd(ctx: CommandContext) {
@@ -1055,6 +1084,44 @@ export class SlackBridge {
     await this.reply(ctx, `Created or reused ${codeInline(`#${channelName}`)} and linked it to ${codeInline(session.cwd)}.`);
   }
 
+  private async bindSessionToHere(ctx: CommandContext, session: SlackThreadBinding) {
+    if (!session.codexThreadId) throw new Error("Selected session has no Codex session ID.");
+    const threadContext = await this.ensureSlackThread(ctx, `Codex session bound: ${session.codexThreadId}`);
+    const key = this.store.threadKey(threadContext.channelId, threadContext.threadTs);
+    const now = new Date().toISOString();
+    this.store.upsertThreadBinding({
+      key,
+      channelId: threadContext.channelId,
+      threadTs: threadContext.threadTs,
+      cwd: session.cwd,
+      projectName: session.projectName,
+      codexThreadId: session.codexThreadId,
+      status: session.status,
+      lastPrompt: session.lastPrompt,
+      lastFinalAnswer: session.lastFinalAnswer,
+      sessionCommands: session.sessionCommands,
+      title: session.title,
+      language: this.currentLanguage(ctx),
+      createdAt: now,
+      updatedAt: now,
+      createdBy: ctx.userId
+    });
+    this.store.setChannelBinding({
+      channelId: threadContext.channelId,
+      cwd: session.cwd,
+      projectName: session.projectName,
+      language: this.currentLanguage(ctx),
+      updatedAt: now,
+      updatedBy: ctx.userId
+    });
+
+    await this.postThread(ctx.client, threadContext.channelId, threadContext.threadTs, [
+      `Bound this ${ctx.threadTs ? "thread" : "channel"} to Codex session ${codeInline(session.codexThreadId)}.`,
+      `cwd: ${codeInline(session.cwd)}`,
+      "Messages sent here with `send`, `$skill ...`, or the configured prefix continue this session."
+    ].join("\n"));
+  }
+
   private fixChannelWorkspace(ctx: CommandContext, workspace: ResolvedWorkspace) {
     this.store.setChannelBinding({
       channelId: ctx.channelId,
@@ -1190,6 +1257,13 @@ export class SlackBridge {
       }
       const nextRawText = replaceSkillToken(value.rawText, value.token, `$${skillName}`);
       await this.handleCommand({ ...ctx, rawText: nextRawText });
+      return;
+    }
+
+    if (value.kind === "bind-session" && value.sessionId) {
+      const session = this.resolveRecentSession(ctx, value.sessionId);
+      if (!session) throw new Error(`No recent Codex session found for selector: ${value.sessionId}`);
+      await this.bindSessionToHere(ctx, session);
       return;
     }
   }
@@ -1361,6 +1435,50 @@ function skillPickerBlocks(skills: SkillDef[], filter: string, rawText: string, 
   ];
 }
 
+function bindSessionPickerBlocks(sessions: SlackThreadBinding[], language: LanguageCode): any[] {
+  const options = sessions
+    .filter((session) => session.codexThreadId)
+    .slice(0, 100)
+    .map((session, index) => ({
+      text: { type: "plain_text", text: optionLabel(`${index + 1}. ${session.status} ${session.codexThreadId} ${session.cwd}`) },
+      value: JSON.stringify({ kind: "bind-session", sessionId: session.codexThreadId } satisfies AssistActionValue)
+    }));
+
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: language === "ko"
+          ? "*세션 선택*\n현재 channel/thread에 연결할 Codex 세션을 고르세요."
+          : "*Bind session*\nChoose the Codex session to bind to this channel/thread."
+      }
+    },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "static_select",
+          action_id: "codex_session_bind_select",
+          placeholder: { type: "plain_text", text: language === "ko" ? "세션 선택" : "Choose session" },
+          options
+        }
+      ]
+    }
+  ];
+}
+
+function renderBindSessionList(sessions: SlackThreadBinding[], language: LanguageCode): string {
+  return [
+    language === "ko" ? "연결할 세션을 선택하세요:" : "Choose a session to bind:",
+    ...sessions.map((session, index) => renderRecentSession(session, index)),
+    "",
+    language === "ko"
+      ? "직접 선택: `bind-session <number|codexThreadId|last>`"
+      : "Direct selection: `bind-session <number|codexThreadId|last>`"
+  ].join("\n");
+}
+
 function renderSuggestionPreview(suggestions: ReturnType<typeof commandSuggestions>, language: LanguageCode): string {
   if (suggestions.length === 0) {
     return language === "ko" ? "일치하는 명령어가 없습니다." : "No matching commands.";
@@ -1483,6 +1601,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `send [-f] <prompt>`: 현재 세션에 입력",
       "- `recent`: Slack/로컬 CLI 세션 목록",
       "- `resume <number|id|last>`: 최근 목록에서 번호/ID로 세션 연결",
+      "- `bind-session [number|id|last]`: 현재 channel/thread를 세션에 연결",
       "- `active`: 실행 중인 CLI 세션 목록",
       "- `active --channel <name> <number>`: active CLI 세션으로 채널 생성/연결",
       "- `history [session]`: 세션 내 이전 명령 보기",
@@ -1503,6 +1622,7 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `send [-f] <prompt>`: continue current session",
     "- `recent`: Slack/local CLI sessions",
     "- `resume <number|id|last>`: bind a session from the recent list",
+    "- `bind-session [number|id|last]`: bind this channel/thread to a session",
     "- `active`: running CLI sessions",
     "- `active --channel <name> <number>`: create/link a channel from an active CLI session",
     "- `history [session]`: show commands sent in a session",

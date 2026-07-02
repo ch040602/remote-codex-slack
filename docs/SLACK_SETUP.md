@@ -50,7 +50,7 @@ Create a slash command:
 Command: /codex
 Request URL: use any valid placeholder if Slack requires one; Socket Mode will deliver the command.
 Short description: Control local Codex
-Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active
+Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | bind-session | new [-f] <prompt> | send [-f] <prompt> | recent
 ```
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
@@ -159,6 +159,15 @@ To resume a session from the recent list by number:
 /codex resume 2
 /codex resume 2 continue with lint fixes
 ```
+
+To bind the current channel or thread to a recent session:
+
+```text
+/codex bind-session
+/codex bind-session 2
+```
+
+Without an argument, `bind-session` shows a picker. After binding, `send`, `$skill ...`, or prefixed messages continue that Codex session.
 
 `recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 

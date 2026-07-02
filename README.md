@@ -128,7 +128,7 @@ Slash command settings:
 Command: /codex
 Request URL: leave any valid placeholder if Slack requires one; Socket Mode delivers the command to Bolt.
 Short description: Control local Codex
-Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent | active
+Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | bind-session | new [-f] <prompt> | send [-f] <prompt> | recent
 ```
 
 Slack slash commands do not execute inside threads. Use an `@bot` mention or the configured message prefix inside threads.
@@ -582,6 +582,16 @@ Resume an existing Codex thread:
 /codex resume thr_1234567890abcdef
 /codex resume thr_1234567890abcdef continue with lint fixes
 ```
+
+Bind the current channel or thread to a recent Codex session:
+
+```text
+/codex bind-session
+/codex bind-session 2
+/codex bind-session 019f20cf
+```
+
+Without an argument, `bind-session` shows a recent-session picker. After binding, channel/thread messages sent with `send`, `$skill ...`, or the configured prefix continue that Codex session.
 
 Explore recent sessions:
 

@@ -25,6 +25,7 @@ export const COMMAND_HELP: CommandHelpEntry[] = [
   { name: "ls", usage: "ls [path]", en: "List files/folders in the current workspace.", ko: "현재 작업공간의 파일/폴더를 봅니다." },
   { name: "cd", usage: "cd <project|path>", en: "Set the workspace for this thread or channel.", ko: "현재 thread 또는 channel의 작업공간을 설정합니다.", aliases: ["use"] },
   { name: "bind-channel", usage: "bind-channel <project|path>", en: "Bind this channel to a workspace.", ko: "현재 channel을 작업공간에 연결합니다." },
+  { name: "bind-session", usage: "bind-session [number|codexThreadId|last]", en: "Bind this channel/thread to a recent Codex session.", ko: "현재 channel/thread를 최근 Codex 세션에 연결합니다." },
   { name: "unbind-channel", usage: "unbind-channel", en: "Remove this channel binding.", ko: "현재 channel 연결을 제거합니다." },
   { name: "new", usage: "new [-f] [--cwd path] <prompt>", en: "Queue or start a new Codex session.", ko: "새 Codex 세션을 대기열에 넣거나 시작합니다." },
   { name: "send", usage: "send [-f] <prompt>", en: "Queue or send input to the current session.", ko: "현재 세션에 보낼 입력을 대기열에 넣거나 전송합니다." },

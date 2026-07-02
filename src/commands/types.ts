@@ -28,6 +28,7 @@ export type CommandName =
   | "status"
   | "stop"
   | "bind-channel"
+  | "bind-session"
   | "unbind-channel";
 
 export interface ParsedCommand {

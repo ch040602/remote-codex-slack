@@ -30,6 +30,7 @@ const KNOWN = new Set<CommandName>([
   "status",
   "stop",
   "bind-channel",
+  "bind-session",
   "unbind-channel"
 ]);
 
