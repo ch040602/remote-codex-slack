@@ -1,0 +1,34 @@
+# Copy to config/projects.yaml and edit.
+# Paths may be Windows or POSIX. Relative project paths are resolved under the first baseDir.
+
+baseDirs:
+  - "C:/Users/YOU/work"
+  - "/home/YOU/work"
+
+# Optional global defaults passed to the Codex driver.
+defaults:
+  sandbox: "workspaceWrite"
+  approvalPolicy: "never"
+  model: ""
+  reasoningEffort: ""
+
+projects:
+  api:
+    path: "api-server"
+    default: true
+
+  web:
+    path: "web-app"
+
+# Optional override. If omitted, npm run channels:create uses the project folder basename.
+# For example, path: "api-server" creates or reuses #api-server.
+# If #api-server already exists, the script asks whether to merge or create #api-server-2.
+# projects:
+#   api:
+#     path: "api-server"
+#     slackChannelName: "api"
+
+# Optional static mapping if you already know Slack channel IDs.
+# channelBindings:
+#   C0123456789: api
+#   C0987654321: web

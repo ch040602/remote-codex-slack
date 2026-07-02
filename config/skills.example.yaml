@@ -1,0 +1,12 @@
+# Copy to config/skills.yaml and edit.
+# The user can call these from Slack prompts as $test-fixer, $review, etc.
+# The bridge adds Codex input items: { type: "skill", name, path }.
+
+skills:
+  example:
+    path: "./skills/example/SKILL.md"
+    description: "Demo skill shipped with this bridge."
+
+  # test-fixer:
+  #   path: "~/.codex/skills/test-fixer/SKILL.md"
+  #   description: "Investigate and fix failing tests."

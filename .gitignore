@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.codex/
+.npm-public-cache/
+data/*.json
+!data/.gitkeep
+.DS_Store
+*.log

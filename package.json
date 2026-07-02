@@ -1,0 +1,34 @@
+{
+  "name": "codex-slack-workspace-bridge",
+  "version": "0.1.0",
+  "description": "Slack bridge for controlling local Codex workspaces, sessions, reruns, final answers, and $skill invocation.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "channels:create": "tsx src/scripts/createProjectChannels.ts",
+    "win:bg:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-start-background.ps1",
+    "win:bg:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-stop-background.ps1",
+    "win:bg:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-status-background.ps1"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.4.0",
+    "dotenv": "^17.2.1",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
