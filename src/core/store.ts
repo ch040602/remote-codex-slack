@@ -34,7 +34,7 @@ export interface SlackThreadBinding {
   createdBy: string;
 }
 
-export type PendingCommandKind = "new" | "send" | "rerun" | "rerun-session";
+export type PendingCommandKind = "new" | "send" | "rerun" | "rerun-session" | "rerun-command";
 
 export interface PendingCommand {
   id: string;

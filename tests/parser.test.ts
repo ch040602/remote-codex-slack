@@ -45,7 +45,9 @@ describe("command parser", () => {
     expect(parseCommand(["bind", "channel api"].join("-")).name).toBe("send");
     expect(parseCommand("unbind-session").name).toBe("unbind-session");
     expect(parseCommand("history 2").name).toBe("history");
-    expect(parseCommand("rerun-command 3 2").name).toBe("rerun-command");
+    const rerunCommand = parseCommand("rerun-command 3 2");
+    expect(rerunCommand.name).toBe("rerun-command");
+    expect(rerunCommand.args).toEqual(["3", "2"]);
     expect(parseCommand("resume 2 continue work").args).toEqual(["2", "continue", "work"]);
     const rerun = parseCommand("rerun-session 2 fix lint");
     expect(rerun.name).toBe("rerun-session");
@@ -72,6 +74,11 @@ describe("command parser", () => {
     const long = parseCommand("send --force fix tests");
     expect(long.options.force).toBe(true);
     expect(long.args).toEqual(["fix", "tests"]);
+
+    const rerunHistory = parseCommand("rerun-command -f 3 2");
+    expect(rerunHistory.name).toBe("rerun-command");
+    expect(rerunHistory.options.f).toBe(true);
+    expect(rerunHistory.args).toEqual(["3", "2"]);
   });
 
   it("parses pending queue commands", () => {

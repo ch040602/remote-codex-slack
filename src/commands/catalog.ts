@@ -37,7 +37,7 @@ export const COMMAND_HELP: CommandHelpEntry[] = [
   { name: "history", usage: "history [session]", en: "Show commands sent in a session.", ko: "세션 내 이전 명령을 봅니다." },
   { name: "rerun", usage: "rerun [number|codexThreadId|last] [prompt]", en: "Rerun a stored prompt.", ko: "저장된 prompt를 다시 실행합니다." },
   { name: "rerun-session", usage: "rerun-session <number|codexThreadId|last> [prompt]", en: "Rerun a recent session.", ko: "최근 세션을 다시 실행합니다." },
-  { name: "rerun-command", usage: "rerun-command <command-number> [session]", en: "Rerun a command from session history.", ko: "세션 이력의 명령을 다시 실행합니다." },
+  { name: "rerun-command", usage: "rerun-command [-f] <command-number> [session]", en: "Queue or immediately rerun a command from session history.", ko: "세션 이력의 명령을 대기열에 넣거나 즉시 다시 실행합니다." },
   { name: "pending", usage: "pending", en: "Show queued commands.", ko: "대기 중인 명령을 봅니다." },
   { name: "pending-edit", usage: "pending-edit <number|id> <prompt>", en: "Edit a queued command.", ko: "대기 중인 명령을 수정합니다." },
   { name: "pending-drop", usage: "pending-drop <number|id>", en: "Drop a queued command.", ko: "대기 중인 명령을 삭제합니다." },

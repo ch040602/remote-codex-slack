@@ -804,15 +804,15 @@ export class SlackBridge {
       ...history.map((item, index) => renderSessionCommand(item, index)),
       "",
       language === "ko"
-        ? "재실행: `rerun-command <command-number> [session]`"
-        : "Rerun: `rerun-command <command-number> [session]`"
+        ? "재실행: `rerun-command [-f] <command-number> [session]`"
+        : "Rerun: `rerun-command [-f] <command-number> [session]`"
     ].join("\n"));
   }
 
   private async handleRerunCommand(ctx: CommandContext, cmd: ParsedCommand) {
     const commandSelector = cmd.args[0];
     if (!commandSelector) {
-      await this.reply(ctx, "Usage: `rerun-command <command-number> [session]`");
+      await this.reply(ctx, "Usage: `rerun-command [-f|--force] <command-number> [session]`");
       return;
     }
     const sessionSelector = cmd.args[1];
@@ -827,7 +827,7 @@ export class SlackBridge {
 
     if (!isForce(cmd)) {
       await this.enqueuePending(ctx, {
-        command: "rerun-session",
+        command: "rerun-command",
         prompt: selected.prompt,
         selector: sessionSelector ?? binding.codexThreadId
       });
@@ -923,7 +923,7 @@ export class SlackBridge {
       await this.startSend(ctx, pending.prompt);
       return;
     }
-    if (pending.command === "rerun" || pending.command === "rerun-session") {
+    if (pending.command === "rerun" || pending.command === "rerun-session" || pending.command === "rerun-command") {
       const binding = pending.selector ? this.resolveRecentSession(ctx, pending.selector) : this.currentThreadBinding(ctx) ?? this.store.findLatestForChannel(ctx.channelId);
       if (!binding?.codexThreadId) throw new Error("No Codex session to rerun");
       const prompt = pending.prompt || binding.lastPrompt;
@@ -1866,7 +1866,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `active`: 실행 중인 CLI 세션 목록",
       "- `active --channel <name> <number>`: active CLI 세션으로 채널 생성/연결",
       "- `history [session]`: 세션 내 이전 명령 보기",
-      "- `rerun-command <number> [session]`: 이력 명령 재실행",
+      "- `rerun-command [-f] <number> [session]`: 이력 명령 대기/즉시 재실행",
       "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: 대기 명령 관리",
       "- `language en|ko`: 안내 언어 변경",
       "",
@@ -1890,7 +1890,7 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `active`: running CLI sessions",
     "- `active --channel <name> <number>`: create/link a channel from an active CLI session",
     "- `history [session]`: show commands sent in a session",
-    "- `rerun-command <number> [session]`: rerun a history command",
+    "- `rerun-command [-f] <number> [session]`: queue/rerun a history command",
     "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: manage queued commands",
     "- `language en|ko`: change help language",
     "",

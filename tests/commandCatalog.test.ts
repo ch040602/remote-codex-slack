@@ -23,4 +23,9 @@ describe("command suggestions", () => {
     expect(rendered).toContain("명령어 추천");
     expect(rendered).toContain("대기 중인 명령");
   });
+
+  it("documents force support for rerunning command history", () => {
+    const usage = commandSuggestions("rerun-command")[0]?.entry.usage;
+    expect(usage).toBe("rerun-command [-f] <command-number> [session]");
+  });
 });

@@ -203,7 +203,10 @@ To view commands from a session and rerun one exactly:
 !codex history 2
 !codex rerun-command 1
 !codex rerun-command 1 2
+!codex rerun-command -f 1 2
 ```
+
+`rerun-command` queues the selected previous command by default. Add `-f` to execute it immediately.
 
 Command explanations are English by default. To switch a channel or thread to Korean:
 
