@@ -12,6 +12,7 @@ export type CommandName =
   | "pwd"
   | "new"
   | "send"
+  | "send-mode"
   | "session"
   | "s"
   | "steer"

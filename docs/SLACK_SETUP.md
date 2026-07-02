@@ -50,12 +50,12 @@ Create a slash command:
 Command: /codex
 Request URL: use any valid placeholder if Slack requires one; Socket Mode will deliver the command.
 Short description: Control local Codex
-Usage hint: s | ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent
+Usage hint: s | send-mode on|off | ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent
 ```
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
 
-After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` and queued for Codex by default. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
+After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` only while send mode is on. Send mode defaults to on for backward compatibility, and you can turn it off with `/codex send-mode off` or the `/codex s` button menu. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
 
 For the simplest session workflow, use:
 
@@ -63,7 +63,7 @@ For the simplest session workflow, use:
 /codex s
 ```
 
-This opens buttons for `New session`, `Bind recent`, `Unbind`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
+This opens buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
 
 ## Connect Channels To Projects
 
@@ -120,7 +120,7 @@ $example summarize this repository
 /codex skills example
 ```
 
-Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow. Since normal channel messages are Codex input, a channel message that starts with `$skill` is treated as a Codex skill prompt even without `!codex send`.
+Slack does not let bots display a live popup while you are typing `$` in the message composer. Send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix` to open a skill picker. Choosing a skill replaces that token in the original command and continues the normal queue/run flow. When send mode is on, a channel message that starts with `$skill` is treated as a Codex skill prompt even without `!codex send`; when send mode is off, use `/codex send ...`, `!codex send ...`, or an app mention.
 
 To browse command suggestions or recover from a partial command:
 
@@ -142,7 +142,7 @@ Skill picker examples:
 fix tests with $exa
 ```
 
-Normal bound-channel messages also participate in this flow. Sending `/codex pwd` runs a bot command instead of forwarding `/codex pwd` to Codex.
+Normal bound-channel messages also participate in this flow while send mode is on. Sending `/codex pwd` runs a bot command instead of forwarding `/codex pwd` to Codex.
 
 You can also create a project channel directly from Slack:
 
@@ -183,7 +183,7 @@ To bind the current channel or thread to a recent session:
 /codex unbind-session
 ```
 
-Without an argument, `bind-session` shows a picker. `/codex s` gives the same picker behind the `Bind recent` button and also provides `New session` and `Unbind`. After binding, normal channel messages, `send`, `$skill ...`, or prefixed messages continue that Codex session.
+Without an argument, `bind-session` shows a picker. `/codex s` gives the same picker behind the `Bind recent` button and also provides `New session`, `Unbind`, and `Send mode on/off`. After binding, normal channel messages continue that Codex session only when send mode is on. `send`, `$skill ...`, or prefixed messages remain explicit controls.
 
 `recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 

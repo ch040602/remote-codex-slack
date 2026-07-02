@@ -39,6 +39,8 @@ describe("command parser", () => {
     expect(parseCommand("active --channel repo 1").name).toBe("active");
     expect(parseCommand("session").name).toBe("session");
     expect(parseCommand("s").name).toBe("s");
+    expect(parseCommand("send-mode off").name).toBe("send-mode");
+    expect(parseCommand("send-mode off").args).toEqual(["off"]);
     expect(parseCommand("bind-session 2").name).toBe("bind-session");
     expect(parseCommand("unbind-session").name).toBe("unbind-session");
     expect(parseCommand("history 2").name).toBe("history");

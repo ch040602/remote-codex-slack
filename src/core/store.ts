@@ -8,6 +8,7 @@ export interface ChannelBinding {
   channelId: string;
   projectName?: string;
   cwd: string;
+  sendMode?: boolean;
   language?: LanguageCode;
   updatedAt: string;
   updatedBy: string;
@@ -26,6 +27,7 @@ export interface SlackThreadBinding {
   lastFinalAnswer?: string;
   sessionCommands?: Array<{ timestamp: string; prompt: string }>;
   title?: string;
+  sendMode?: boolean;
   language?: LanguageCode;
   updatedAt: string;
   createdAt: string;

@@ -31,6 +31,7 @@ export const COMMAND_HELP: CommandHelpEntry[] = [
   { name: "unbind-channel", usage: "unbind-channel", en: "Remove this channel binding.", ko: "현재 channel 연결을 제거합니다." },
   { name: "new", usage: "new [-f] [--cwd path] <prompt>", en: "Queue or start a new Codex session.", ko: "새 Codex 세션을 대기열에 넣거나 시작합니다." },
   { name: "send", usage: "send [-f] <prompt>", en: "Queue or send input to the current session.", ko: "현재 세션에 보낼 입력을 대기열에 넣거나 전송합니다." },
+  { name: "send-mode", usage: "send-mode on|off|status", en: "Toggle whether normal chat messages are sent to Codex.", ko: "일반 채팅 메시지를 Codex로 보낼지 켜고 끕니다." },
   { name: "steer", usage: "steer <prompt>", en: "Add input to an active in-flight turn.", ko: "실행 중인 turn에 추가 입력을 보냅니다." },
   { name: "resume", usage: "resume <number|codexThreadId|last> [prompt]", en: "Bind/resume a recent or existing Codex session.", ko: "번호 또는 ID로 기존 Codex 세션을 연결하거나 이어갑니다." },
   { name: "recent", usage: "recent [--channel name] [number]", en: "Show Slack and local Codex CLI sessions.", ko: "Slack 및 로컬 Codex CLI 최근 세션을 봅니다.", aliases: ["sessions"] },

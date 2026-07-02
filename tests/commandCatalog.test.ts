@@ -8,6 +8,7 @@ describe("command suggestions", () => {
     expect(commandSuggestions("hist").map((suggestion) => suggestion.entry.name)).toContain("history");
     expect(commandSuggestions("active").map((suggestion) => suggestion.entry.name)).toContain("active");
     expect(commandSuggestions("s").map((suggestion) => suggestion.entry.name)).toContain("session");
+    expect(commandSuggestions("send-m").map((suggestion) => suggestion.entry.name)).toContain("send-mode");
     expect(commandSuggestions("unbind-s").map((suggestion) => suggestion.entry.name)).toContain("unbind-session");
   });
 

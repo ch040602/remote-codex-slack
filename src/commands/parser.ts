@@ -14,6 +14,7 @@ const KNOWN = new Set<CommandName>([
   "pwd",
   "new",
   "send",
+  "send-mode",
   "session",
   "s",
   "steer",

@@ -67,4 +67,34 @@ describe("Store pending commands", () => {
     expect(store.getThreadBinding("C1:1.0")).toBeUndefined();
     expect(store.getThreadBindingByCodexThread("019f20cf-7b8a-7c52-b037-d90afad6fd44")).toBeUndefined();
   });
+
+  it("persists send mode on channel and thread bindings", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-slack-store-send-mode-"));
+    const store = new Store(path.join(dir, "state.json"));
+    store.load();
+
+    store.setChannelBinding({
+      channelId: "C1",
+      cwd: "C:/repo",
+      sendMode: false,
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      updatedBy: "U1"
+    });
+    store.upsertThreadBinding({
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      sendMode: true,
+      status: "idle",
+      createdAt: "2026-07-02T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      createdBy: "U1"
+    });
+
+    const reloaded = new Store(path.join(dir, "state.json"));
+    reloaded.load();
+    expect(reloaded.getChannelBinding("C1")?.sendMode).toBe(false);
+    expect(reloaded.getThreadBinding("C1:1.0")?.sendMode).toBe(true);
+  });
 });
