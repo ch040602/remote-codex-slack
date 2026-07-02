@@ -25,6 +25,13 @@ describe("command suggestions", () => {
     expect(rendered).toContain("대기 중인 명령");
   });
 
+  it("renders precomputed suggestions without recomputing the lookup", () => {
+    const suggestions = commandSuggestions("send-p", 3);
+    const rendered = renderCommandSuggestions("send-p", "en", "!codex", suggestions);
+    expect(rendered).toContain("Command suggestions");
+    expect(rendered).toContain("send-policy immediate|confirm|pending|status");
+  });
+
   it("documents force support for rerunning command history", () => {
     const usage = commandSuggestions("rerun-command")[0]?.entry.usage;
     expect(usage).toBe("rerun-command [-f] <command-number> [session]");

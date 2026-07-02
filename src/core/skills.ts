@@ -23,13 +23,16 @@ export interface SkillPromptBuildResult {
 const SKILL_TOKEN = /(^|\s)\$([A-Za-z0-9_.-]+)/g;
 
 export class SkillRegistry {
+  private sortedSkills?: SkillDef[];
+
   constructor(
     private readonly config: BridgeConfig,
     private readonly strict = true
   ) {}
 
   list(): SkillDef[] {
-    return [...this.config.skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+    this.sortedSkills ??= [...this.config.skills.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return this.sortedSkills;
   }
 
   isStrict(): boolean {

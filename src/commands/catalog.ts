@@ -63,8 +63,7 @@ export function hasCommandSuggestion(query: string): boolean {
   return commandSuggestions(query, 1).length > 0;
 }
 
-export function renderCommandSuggestions(query: string, language: LanguageCode, prefix: string): string {
-  const suggestions = commandSuggestions(query);
+export function renderCommandSuggestions(query: string, language: LanguageCode, prefix: string, suggestions = commandSuggestions(query)): string {
   const normalized = normalizeQuery(query);
   if (suggestions.length === 0) {
     return language === "ko"

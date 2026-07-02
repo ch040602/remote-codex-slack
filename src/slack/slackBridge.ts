@@ -12,7 +12,7 @@ import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { commandTarget, hasOption, isPlainSlackChannelMessage, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
-import { COMMAND_HELP, commandSuggestions, hasCommandSuggestion, renderCommandSuggestions } from "../commands/catalog.js";
+import { COMMAND_HELP, commandSuggestions, renderCommandSuggestions, type CommandSuggestion } from "../commands/catalog.js";
 import type { ParsedCommand } from "../commands/types.js";
 import { splitForSlack, codeBlock } from "./messageUtils.js";
 
@@ -40,9 +40,17 @@ interface AssistActionValue {
 
 const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session", "send-mode", "send-policy"]);
 const DEFAULT_LINKED_SEND_POLICY: SendPolicy = "pending";
+const RECENT_SESSIONS_CACHE_MS = 5000;
+const MAX_SKILL_PICKER_OPTIONS = 50;
+
+interface CommandLookupResult {
+  query: string;
+  suggestions: CommandSuggestion[];
+}
 
 export class SlackBridge {
   readonly app: App;
+  private recentSessionsCache?: { expiresAt: number; limit: number; sessions: SlackThreadBinding[] };
 
   constructor(
     private readonly config: BridgeConfig,
@@ -161,9 +169,9 @@ export class SlackBridge {
       const parsed = parseCommand(ctx.rawText);
       logger.info("slack command", { userId: ctx.userId, channelId: ctx.channelId, name: parsed.name });
 
-      const commandLookup = this.commandLookupQuery(ctx, parsed);
+      const commandLookup = this.commandLookup(ctx, parsed);
       if (commandLookup !== undefined) {
-        await this.replyWithBlocks(ctx, this.commandAssistMessage(commandLookup, this.currentLanguage(ctx)));
+        await this.replyWithBlocks(ctx, this.commandAssistMessage(commandLookup.query, this.currentLanguage(ctx), commandLookup.suggestions));
         return;
       }
 
@@ -285,17 +293,17 @@ export class SlackBridge {
     return env.allowAllSlackUsers || env.allowedSlackUserIds.includes(userId);
   }
 
-  private commandLookupQuery(_ctx: CommandContext, parsed: ParsedCommand): string | undefined {
+  private commandLookup(_ctx: CommandContext, parsed: ParsedCommand): CommandLookupResult | undefined {
     if (_ctx.bypassCommandLookup) return undefined;
     const raw = parsed.rawArgs.trim();
     if (parsed.name !== "send") return undefined;
     if (!raw || raw.startsWith("$")) return undefined;
-    if (raw === "?") return "";
+    if (raw === "?") return { query: "", suggestions: commandSuggestions("", 10) };
 
     const first = raw.split(/\s+/)[0];
     if (!/^[A-Za-z가-힣?_-]+$/.test(first)) return undefined;
-    if (hasCommandSuggestion(first)) return first;
-    return undefined;
+    const suggestions = commandSuggestions(first, 10);
+    return suggestions.length > 0 ? { query: first, suggestions } : undefined;
   }
 
   private async handleUse(ctx: CommandContext, cmd: ParsedCommand) {
@@ -332,6 +340,7 @@ export class SlackBridge {
         updatedAt: now,
         createdBy: existing?.createdBy ?? ctx.userId
       });
+      this.invalidateRecentSessions();
       await this.reply(ctx, `Thread workspace set to: ${codeInline(resolved.cwd)}`);
       return;
     }
@@ -344,6 +353,7 @@ export class SlackBridge {
       updatedAt: new Date().toISOString(),
       updatedBy: ctx.userId
     });
+    this.invalidateRecentSessions();
     await this.reply(ctx, `Channel workspace set to: ${codeInline(resolved.cwd)}`);
   }
 
@@ -463,6 +473,7 @@ export class SlackBridge {
     });
     const sendMode = this.sendModeForContext(ctx);
     const linkedBinding = this.store.updateThread(binding.key, { sendMode, sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+    this.invalidateRecentSessions();
     await this.postThreadWithBlocks(ctx.client, threadContext.channelId, threadContext.threadTs, {
       text: [
       "New same-repo Codex session linked.",
@@ -580,6 +591,7 @@ export class SlackBridge {
       return;
     }
     this.store.removeThreadBinding(binding.key);
+    this.invalidateRecentSessions();
     await this.reply(ctx, [
       "Session binding removed.",
       `cwd remains: ${codeInline(this.currentWorkspace(ctx).cwd)}`,
@@ -657,6 +669,7 @@ export class SlackBridge {
       title: prompt.slice(0, 80)
     });
     const linkedBinding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+    this.invalidateRecentSessions();
     const { turnId, referencedSkills } = await this.codex.startTurn(linkedBinding, prompt);
     this.recordSessionCommand(ctx, linkedBinding, "new", prompt);
     await this.postThreadWithBlocks(ctx.client, threadContext.channelId, threadContext.threadTs, {
@@ -705,6 +718,7 @@ export class SlackBridge {
         title: prompt.slice(0, 80)
       });
       binding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+      this.invalidateRecentSessions();
       createdBinding = true;
     }
     const { turnId, referencedSkills } = await this.codex.sendOrSteer(binding, prompt);
@@ -765,6 +779,7 @@ export class SlackBridge {
       createdBy: ctx.userId
     });
     binding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+    this.invalidateRecentSessions();
 
     const prompt = cmd.args.slice(1).join(" ").trim();
     if (prompt) {
@@ -859,8 +874,10 @@ export class SlackBridge {
       projectName: target.projectName,
       createdBy: ctx.userId
     });
+    this.invalidateRecentSessions();
     if (binding.key.startsWith("codex-cli:") || !binding.channelId) {
       resumed = this.store.updateThread(resumed.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+      this.invalidateRecentSessions();
     }
     const { turnId, referencedSkills } = await this.codex.startTurn(resumed, prompt);
     this.recordSessionCommand(ctx, resumed, "rerun", prompt);
@@ -1240,6 +1257,7 @@ export class SlackBridge {
       projectName: binding.projectName,
       createdBy: ctx.userId
     });
+    this.invalidateRecentSessions();
   }
 
   private sessionCommandHistory(binding: SlackThreadBinding): Array<SessionCommandRecord | CodexCliSessionCommand> {
@@ -1423,11 +1441,18 @@ export class SlackBridge {
   }
 
   private listRecentSessions(limit: number): SlackThreadBinding[] {
-    const local = this.store.listThreads(limit).filter((session) => session.codexThreadId);
+    const now = Date.now();
+    const cached = this.recentSessionsCache;
+    if (cached && cached.expiresAt > now && cached.limit >= limit) {
+      return cached.sessions.slice(0, limit);
+    }
+
+    const scanLimit = Math.max(limit, cached?.limit ?? 0);
+    const local = this.store.listThreads(scanLimit).filter((session) => session.codexThreadId);
     const seen = new Set(local.map((session) => session.codexThreadId).filter(Boolean));
     let external: SlackThreadBinding[] = [];
     try {
-      external = listCodexCliSessions({ sessionsDir: env.codexSessionsDir, limit })
+      external = listCodexCliSessions({ sessionsDir: env.codexSessionsDir, limit: scanLimit })
         .filter((session) => !seen.has(session.id))
         .map((session) => ({
           key: `codex-cli:${session.id}`,
@@ -1447,9 +1472,15 @@ export class SlackBridge {
     } catch (error) {
       logger.warn("failed to read Codex CLI sessions", { sessionsDir: env.codexSessionsDir, error: String(error) });
     }
-    return [...local, ...external]
+    const sessions = [...local, ...external]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .slice(0, limit);
+      .slice(0, scanLimit);
+    this.recentSessionsCache = { expiresAt: now + RECENT_SESSIONS_CACHE_MS, limit: scanLimit, sessions };
+    return sessions.slice(0, limit);
+  }
+
+  private invalidateRecentSessions() {
+    this.recentSessionsCache = undefined;
   }
 
   private async materializeSessionBinding(ctx: CommandContext, binding: SlackThreadBinding): Promise<SlackThreadBinding> {
@@ -1482,6 +1513,7 @@ export class SlackBridge {
       updatedAt: new Date().toISOString(),
       updatedBy: ctx.userId
     });
+    this.invalidateRecentSessions();
     const linkedText = [
         `Channel linked from recent session ${codeInline(session.codexThreadId)}.`,
         `cwd: ${codeInline(session.cwd)}`,
@@ -1513,6 +1545,7 @@ export class SlackBridge {
         updatedAt: new Date().toISOString(),
         createdBy: ctx.userId
       });
+      this.invalidateRecentSessions();
     }
     await this.reply(ctx, [
       `Created or reused ${codeInline(`#${channelName}`)} and linked it to ${codeInline(session.cwd)}.`,
@@ -1553,6 +1586,7 @@ export class SlackBridge {
       updatedAt: now,
       updatedBy: ctx.userId
     });
+    this.invalidateRecentSessions();
 
     const text = [
       `Bound this ${ctx.threadTs ? "thread" : "channel"} to Codex session ${codeInline(session.codexThreadId)}.`,
@@ -1664,23 +1698,24 @@ export class SlackBridge {
     await client.chat.postMessage({ channel, thread_ts: threadTs, text: message.text, blocks: message.blocks });
   }
 
-  private commandAssistMessage(query: string, language: LanguageCode): { text: string; blocks: any[] } {
+  private commandAssistMessage(query: string, language: LanguageCode, suggestions = commandSuggestions(query, 10)): { text: string; blocks: any[] } {
     return {
-      text: renderCommandSuggestions(query, language, env.commandPrefix),
-      blocks: commandPickerBlocks(language, query)
+      text: renderCommandSuggestions(query, language, env.commandPrefix, suggestions),
+      blocks: commandPickerBlocks(language, query, suggestions)
     };
   }
 
   private skillAssistMessage(filter: string, rawText: string, token = `$${filter.replace(/^\$/, "")}`, leadText?: string): { text: string; blocks: any[] } {
     const normalized = filter.replace(/^\$/, "").trim();
-    const text = [leadText, this.renderSkills(normalized)].filter(Boolean).join("\n\n");
-    const matchingSkills = this.skills.search(normalized);
+    const matchingSkills = normalized ? this.skills.search(normalized) : this.skills.list();
     const pickerSkills = matchingSkills.length > 0 || !normalized
       ? matchingSkills
       : this.skills.suggestionsFor(normalized, 100);
+    const isSuggested = Boolean(normalized && matchingSkills.length === 0 && pickerSkills.length > 0);
+    const text = [leadText, this.renderSkills(normalized, pickerSkills, isSuggested)].filter(Boolean).join("\n\n");
     return {
       text,
-      blocks: skillPickerBlocks(pickerSkills.slice(0, 100), normalized, rawText, token, text)
+      blocks: skillPickerBlocks(pickerSkills.slice(0, MAX_SKILL_PICKER_OPTIONS), normalized, rawText, token, text)
     };
   }
 
@@ -1783,15 +1818,17 @@ export class SlackBridge {
       .join("\n");
   }
 
-  private renderSkills(filter = ""): string {
+  private renderSkills(filter = "", providedSkills?: SkillDef[], suggested = false): string {
     const normalized = filter.replace(/^\$/, "").trim();
-    const skills = normalized ? this.skills.search(normalized) : this.skills.list();
+    const skills = providedSkills ?? (normalized ? this.skills.search(normalized) : this.skills.list());
     if (skills.length === 0) {
       return normalized
         ? `No skills configured matching ${codeInline(`$${normalized}`)}. Use ${codeInline("$")} or ${codeInline("skills")} to list all skills.`
         : "No skills configured.";
     }
-    const title = normalized ? `Skills matching ${codeInline(`$${normalized}`)}:` : "Configured skills:";
+    const title = suggested
+      ? `Skill suggestions for ${codeInline(`$${normalized}`)}:`
+      : normalized ? `Skills matching ${codeInline(`$${normalized}`)}:` : "Configured skills:";
     const visible = skills.slice(0, 25);
     return [
       title,
@@ -1818,14 +1855,15 @@ export class SlackBridge {
     if (!this.skills.isStrict()) return false;
     const unknown = this.skills.unknownSkillNames(prompt);
     if (unknown.length === 0) return false;
+    const unknownSuggestions = new Map(unknown.map((name) => [name, this.skills.suggestionsFor(name)]));
     const lines = unknown.map((name) => {
-      const suggestions = this.skills.suggestionsFor(name);
+      const suggestions = unknownSuggestions.get(name) ?? [];
       if (suggestions.length === 0) {
         return `Unknown skill ${codeInline(`$${name}`)}. Use ${codeInline("$")} or ${codeInline("skills")} to list configured skills.`;
       }
       return `Unknown skill ${codeInline(`$${name}`)}. Did you mean ${suggestions.map((skill) => codeInline(`$${skill.name}`)).join(", ")}?`;
     });
-    const firstWithSuggestions = unknown.find((name) => this.skills.suggestionsFor(name).length > 0);
+    const firstWithSuggestions = unknown.find((name) => (unknownSuggestions.get(name)?.length ?? 0) > 0);
     if (firstWithSuggestions) {
       await this.replyWithBlocks(ctx, this.skillAssistMessage(firstWithSuggestions, ctx.rawText, `$${firstWithSuggestions}`, lines.join("\n")));
       return true;
@@ -1853,8 +1891,7 @@ function codeInline(text: string): string {
   return `\`${String(text).replaceAll("`", "ʼ")}\``;
 }
 
-function commandPickerBlocks(language: LanguageCode, query: string): any[] {
-  const suggestions = commandSuggestions(query, 10);
+function commandPickerBlocks(language: LanguageCode, query: string, suggestions = commandSuggestions(query, 10)): any[] {
   const title = language === "ko" ? "명령어 완성 도우미" : "Command assistant";
   const help = language === "ko"
     ? "명령을 선택하세요. 인자가 필요 없는 명령은 바로 실행되고, 인자가 필요한 명령은 형식 도움을 보여줍니다."
