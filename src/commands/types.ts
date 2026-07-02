@@ -30,10 +30,8 @@ export type CommandName =
   | "pending-run"
   | "status"
   | "stop"
-  | "bind-channel"
   | "bind-session"
-  | "unbind-session"
-  | "unbind-channel";
+  | "unbind-session";
 
 export interface ParsedCommand {
   name: CommandName;

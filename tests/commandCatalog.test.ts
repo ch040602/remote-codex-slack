@@ -10,6 +10,7 @@ describe("command suggestions", () => {
     expect(commandSuggestions("s").map((suggestion) => suggestion.entry.name)).toContain("session");
     expect(commandSuggestions("send-m").map((suggestion) => suggestion.entry.name)).toContain("send-mode");
     expect(commandSuggestions("unbind-s").map((suggestion) => suggestion.entry.name)).toContain("unbind-session");
+    expect(commandSuggestions("bind-c").map((suggestion) => suggestion.entry.name)).not.toContain(["bind", "channel"].join("-"));
   });
 
   it("suggests commands by small typos", () => {

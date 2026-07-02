@@ -1,6 +1,7 @@
 import { App } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 import fs from "node:fs";
+import path from "node:path";
 import { resolveUserPath } from "../config.js";
 import type { BridgeConfig, SkillDef } from "../config.js";
 import type { PathResolver, ResolvedWorkspace } from "../core/pathResolver.js";
@@ -185,18 +186,11 @@ export class SlackBridge {
         case "ls":
           await this.handleLs(ctx, parsed);
           return;
-        case "bind-channel":
-          await this.handleBindChannel(ctx, parsed);
-          return;
         case "bind-session":
           await this.handleBindSession(ctx, parsed);
           return;
         case "unbind-session":
           await this.handleUnbindSession(ctx);
-          return;
-        case "unbind-channel":
-          this.store.removeChannelBinding(ctx.channelId);
-          await this.reply(ctx, "Channel binding removed.");
           return;
         case "new":
           await this.handleNew(ctx, parsed);
@@ -357,25 +351,6 @@ export class SlackBridge {
     await this.reply(ctx, `Created or reused ${codeInline(`#${channelName}`)} with cwd ${codeInline(root)}.`);
   }
 
-  private async handleBindChannel(ctx: CommandContext, cmd: ParsedCommand) {
-    const target = cmd.args.join(" ").trim();
-    if (!target) {
-      await this.reply(ctx, "Usage: `bind-channel <project|path>`");
-      return;
-    }
-    const resolved = this.paths.resolve(target);
-    this.paths.ensureExists(resolved.cwd);
-    this.store.setChannelBinding({
-      channelId: ctx.channelId,
-      cwd: resolved.cwd,
-      projectName: resolved.projectName,
-      language: this.currentLanguage(ctx),
-      updatedAt: new Date().toISOString(),
-      updatedBy: ctx.userId
-    });
-    await this.reply(ctx, `Channel is now bound to ${resolved.projectName ? `project ${codeInline(resolved.projectName)}` : "workspace"}: ${codeInline(resolved.cwd)}`);
-  }
-
   private async handleBindSession(ctx: CommandContext, cmd: ParsedCommand) {
     const selector = cmd.args[0];
     const recent = this.listRecentSessions(15);
@@ -384,8 +359,9 @@ export class SlackBridge {
       return;
     }
     if (!selector) {
+      await this.reply(ctx, renderBindSessionList(recent, this.currentLanguage(ctx)));
       await this.replyWithBlocks(ctx, {
-        text: renderBindSessionList(recent, this.currentLanguage(ctx)),
+        text: this.currentLanguage(ctx) === "ko" ? "세션 선택 메뉴" : "Session picker",
         blocks: bindSessionPickerBlocks(recent, this.currentLanguage(ctx))
       });
       return;
@@ -1220,7 +1196,7 @@ export class SlackBridge {
       text: [
         `Channel linked from recent session ${codeInline(session.codexThreadId)}.`,
         `cwd: ${codeInline(session.cwd)}`,
-        session.lastFinalAnswer ? `last response: ${preview(session.lastFinalAnswer, 500)}` : undefined,
+        session.lastFinalAnswer ? `last response:\n${indentBlock(session.lastFinalAnswer)}` : undefined,
         "Send a normal channel message here to continue the session. Messages queue by default; use `/codex send -f ...` or `!codex send -f ...` to execute immediately."
       ].filter(Boolean).join("\n")
     });
@@ -1681,7 +1657,8 @@ function bindSessionPickerBlocks(sessions: SlackThreadBinding[], language: Langu
     .filter((session) => session.codexThreadId)
     .slice(0, 100)
     .map((session, index) => ({
-      text: { type: "plain_text", text: optionLabel(`${index + 1}. ${session.status} ${session.codexThreadId} ${session.cwd}`) },
+      text: { type: "plain_text", text: optionLabel(`${index + 1}. ${workspaceFolderName(session.cwd)} ${session.status} ${session.codexThreadId}`) },
+      description: { type: "plain_text", text: optionLabel(session.lastFinalAnswer ? `last: ${session.lastFinalAnswer}` : session.cwd) },
       value: JSON.stringify({ kind: "bind-session", sessionId: session.codexThreadId } satisfies AssistActionValue)
     }));
 
@@ -1772,15 +1749,29 @@ async function findSlackChannel(client: WebClient, name: string): Promise<{ id?:
 
 function renderRecentSession(session: SlackThreadBinding, index: number): string {
   return [
-    `${index + 1}. ${codeInline(session.codexThreadId ?? "unbound")} ${codeInline(session.status)}`,
+    `${index + 1}. ${codeInline(workspaceFolderName(session.cwd))} ${codeInline(session.status)}`,
     `   cwd: ${session.cwd}`,
+    `   session: ${session.codexThreadId ?? "unbound"}`,
     session.key.startsWith("codex-cli:") ? "   source: local Codex CLI session" : undefined,
     session.projectName ? `   project: ${session.projectName}` : undefined,
     session.channelId && session.threadTs ? `   slack: ${session.channelId}:${session.threadTs}` : undefined,
     session.lastPrompt ? `   last prompt: ${preview(session.lastPrompt, 160)}` : undefined,
-    session.lastFinalAnswer ? `   last response: ${preview(session.lastFinalAnswer, 300)}` : "   last response: (none yet)"
+    session.lastFinalAnswer ? `   last response:\n${indentBlock(session.lastFinalAnswer)}` : "   last response: (none yet)"
   ]
     .filter(Boolean)
+    .join("\n");
+}
+
+function workspaceFolderName(cwd: string): string {
+  const normalized = cwd.replace(/[\\\/]+$/, "");
+  return path.basename(normalized) || normalized || "workspace";
+}
+
+function indentBlock(value: string): string {
+  return value
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => `      ${line}`)
     .join("\n");
 }
 

@@ -32,10 +32,8 @@ const KNOWN = new Set<CommandName>([
   "pending-run",
   "status",
   "stop",
-  "bind-channel",
   "bind-session",
-  "unbind-session",
-  "unbind-channel"
+  "unbind-session"
 ]);
 
 const BOOLEAN_OPTIONS = new Set(["force"]);

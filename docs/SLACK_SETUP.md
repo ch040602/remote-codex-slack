@@ -71,7 +71,7 @@ Use one of these options:
 
 1. Manually invite the bot to existing channels and add channel IDs to `config/projects.yaml`.
 2. Add projects with local paths and run `npm run channels:create`. Channel names are derived from the project folder basename.
-3. Bind a channel from Slack with `/codex bind-channel <project>` or `/codex use --channel <project>`.
+3. Bind a channel from Slack with `/codex use --channel <project>`.
 
 Example:
 
@@ -105,7 +105,7 @@ Then in Slack:
 
 ```text
 /codex projects
-/codex bind-channel api
+/codex use --channel api
 /codex s
 /codex new $example summarize this repository
 ```
@@ -240,7 +240,7 @@ codex exec --json --skip-git-repo-check -C <workspace> -
 3. Bind the project channel:
 
 ```text
-/codex bind-channel api
+/codex use --channel api
 ```
 
 4. Browse skills when needed:

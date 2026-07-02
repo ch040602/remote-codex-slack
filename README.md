@@ -193,7 +193,7 @@ codex exec --json --skip-git-repo-check -C <workspace> -
 codex exec resume --json <session-id> -
 ```
 
-The bridge also sets the spawned process `cwd` to the selected workspace. This means Codex runs in the project folder selected by `/codex bind-channel`, `/codex use --channel`, thread `cd`, or `new --cwd`.
+The bridge also sets the spawned process `cwd` to the selected workspace. This means Codex runs in the project folder selected by `/codex use --channel`, thread `cd`, or `new --cwd`.
 
 Optional app-server mode:
 
@@ -441,7 +441,7 @@ npm start
 3. In the project channel, bind the channel once:
 
 ```text
-/codex bind-channel api
+/codex use --channel api
 ```
 
 4. Confirm the active workspace:
@@ -553,7 +553,6 @@ Show the current workspace:
 Bind the current Slack channel to a project:
 
 ```text
-/codex bind-channel api
 /codex use --channel api
 /codex use --channel=api
 ```
@@ -644,7 +643,7 @@ Explore recent sessions:
 !codex sessions
 ```
 
-The list includes Slack-created sessions and existing local Codex CLI sessions from `CODEX_SESSIONS_DIR`. Each entry shows the Codex session ID, status, working path, Slack thread when already bound, last prompt, and last response preview.
+The list includes Slack-created sessions and existing local Codex CLI sessions from `CODEX_SESSIONS_DIR`. Each entry starts with the workspace folder name, then shows the Codex session ID, status, working path, Slack thread when already bound, last prompt, and last response.
 
 For local Codex CLI sessions, `active` means the JSONL log has an unfinished turn or a currently running local `codex` process references that session ID. This includes Codex sessions you opened directly in a terminal, even if they were not started through Slack.
 
