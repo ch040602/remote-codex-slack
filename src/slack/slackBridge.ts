@@ -10,7 +10,7 @@ import { listCodexCliSessions, type CodexCliSessionCommand } from "../codex/sess
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-import { commandTarget, hasOption, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
+import { commandTarget, hasOption, isPlainSlackChannelMessage, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
 import { COMMAND_HELP, commandSuggestions, hasCommandSuggestion, renderCommandSuggestions } from "../commands/catalog.js";
 import type { ParsedCommand } from "../commands/types.js";
 import { splitForSlack, codeBlock } from "./messageUtils.js";
@@ -23,19 +23,20 @@ interface CommandContext {
   messageTs?: string;
   isSlash: boolean;
   rawText: string;
+  bypassCommandLookup?: boolean;
   client: WebClient;
   respond?: (message: any) => Promise<any>;
 }
 
 interface AssistActionValue {
-  kind: "command" | "skill" | "bind-session";
+  kind: "command" | "skill" | "bind-session" | "session-action";
   command?: string;
   rawText?: string;
   sessionId?: string;
   token?: string;
 }
 
-const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session"]);
+const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session"]);
 
 export class SlackBridge {
   readonly app: App;
@@ -94,7 +95,8 @@ export class SlackBridge {
     this.app.message(async ({ message, client }) => {
       const msg = message as { bot_id?: string; text?: string; user?: string; channel: string; channel_type?: string; thread_ts?: string; ts: string };
       if (msg.bot_id || !msg.text || !msg.user) return;
-      const rawText = normalizeSlackMessageText(msg.text, env.commandPrefix, msg.channel_type === "im");
+      const isDirectMessage = msg.channel_type === "im";
+      const rawText = normalizeSlackMessageText(msg.text, env.commandPrefix, isDirectMessage);
       if (rawText === undefined) return;
       await this.handleCommand({
         userId: msg.user,
@@ -103,6 +105,7 @@ export class SlackBridge {
         messageTs: msg.ts,
         isSlash: false,
         rawText,
+        bypassCommandLookup: isPlainSlackChannelMessage(msg.text, env.commandPrefix, isDirectMessage),
         client
       });
     });
@@ -118,6 +121,11 @@ export class SlackBridge {
     });
 
     this.app.action("codex_session_bind_select", async ({ ack, body, client, respond }: any) => {
+      await ack();
+      await this.handleAssistAction(body, client, respond);
+    });
+
+    this.app.action("codex_session_action", async ({ ack, body, client, respond }: any) => {
       await ack();
       await this.handleAssistAction(body, client, respond);
     });
@@ -181,6 +189,9 @@ export class SlackBridge {
         case "bind-session":
           await this.handleBindSession(ctx, parsed);
           return;
+        case "unbind-session":
+          await this.handleUnbindSession(ctx);
+          return;
         case "unbind-channel":
           this.store.removeChannelBinding(ctx.channelId);
           await this.reply(ctx, "Channel binding removed.");
@@ -190,6 +201,10 @@ export class SlackBridge {
           return;
         case "send":
           await this.handleSend(ctx, parsed);
+          return;
+        case "session":
+        case "s":
+          await this.handleSessionMenu(ctx);
           return;
         case "steer":
           await this.handleSteer(ctx, parsed);
@@ -252,6 +267,7 @@ export class SlackBridge {
   }
 
   private commandLookupQuery(_ctx: CommandContext, parsed: ParsedCommand): string | undefined {
+    if (_ctx.bypassCommandLookup) return undefined;
     const raw = parsed.rawArgs.trim();
     if (parsed.name !== "send") return undefined;
     if (!raw || raw.startsWith("$")) return undefined;
@@ -373,6 +389,77 @@ export class SlackBridge {
     const session = this.resolveRecentSession(ctx, selector);
     if (!session) throw new Error(`No recent Codex session found for selector: ${selector}`);
     await this.bindSessionToHere(ctx, session);
+  }
+
+  private async handleSessionMenu(ctx: CommandContext) {
+    const language = this.currentLanguage(ctx);
+    const workspace = this.currentWorkspace(ctx);
+    const binding = this.currentThreadBinding(ctx) ?? this.store.findLatestForChannel(ctx.channelId);
+    const text = renderSessionQuickText(workspace, binding, language);
+    await this.replyWithBlocks(ctx, {
+      text,
+      blocks: sessionQuickActionBlocks(language, text)
+    });
+  }
+
+  private async handleSessionAction(ctx: CommandContext, action: string) {
+    switch (action) {
+      case "new-same-repo":
+        await this.createSameRepoSessionSlot(ctx);
+        return;
+      case "bind-recent":
+        await this.handleBindSession(ctx, parseCommand("bind-session"));
+        return;
+      case "unbind-session":
+        await this.handleUnbindSession(ctx);
+        return;
+      case "status":
+        await this.handleStatus(ctx);
+        return;
+      case "recent":
+        await this.handleSessions(ctx, parseCommand("recent"));
+        return;
+      default:
+        await this.reply(ctx, `Unknown session action: ${action}`);
+    }
+  }
+
+  private async createSameRepoSessionSlot(ctx: CommandContext) {
+    const workspace = this.currentWorkspace(ctx);
+    this.paths.ensureExists(workspace.cwd);
+    this.fixChannelWorkspace(ctx, workspace);
+
+    const threadContext = await this.ensureSlackThread({ ...ctx, threadTs: undefined }, `Codex session: ${workspace.projectName ?? workspace.cwd}`);
+    const key = this.store.threadKey(threadContext.channelId, threadContext.threadTs);
+    const binding = await this.codex.createThread({
+      slackKey: key,
+      channelId: threadContext.channelId,
+      threadTs: threadContext.threadTs,
+      cwd: workspace.cwd,
+      projectName: workspace.projectName,
+      createdBy: ctx.userId,
+      title: "New session"
+    });
+    await this.postThread(ctx.client, threadContext.channelId, threadContext.threadTs, [
+      "New same-repo Codex session linked.",
+      `cwd: ${codeInline(workspace.cwd)}`,
+      binding.codexThreadId ? `codexThreadId: ${codeInline(binding.codexThreadId)}` : "codexThreadId: pending until the first CLI turn starts",
+      "Send a normal message in this thread to start work, or use `send -f <prompt>` to run immediately."
+    ].join("\n"));
+  }
+
+  private async handleUnbindSession(ctx: CommandContext) {
+    const binding = this.currentThreadBinding(ctx) ?? this.store.findLatestForChannel(ctx.channelId);
+    if (!binding) {
+      await this.reply(ctx, "No session binding found here.");
+      return;
+    }
+    this.store.removeThreadBinding(binding.key);
+    await this.reply(ctx, [
+      "Session binding removed.",
+      `cwd remains: ${codeInline(this.currentWorkspace(ctx).cwd)}`,
+      "Use `session` to bind another session or create a new same-repo session."
+    ].join("\n"));
   }
 
   private async handlePwd(ctx: CommandContext) {
@@ -1264,6 +1351,11 @@ export class SlackBridge {
       await this.bindSessionToHere(ctx, session);
       return;
     }
+
+    if (value.kind === "session-action" && value.command) {
+      await this.handleSessionAction(ctx, value.command);
+      return;
+    }
   }
 
   private async handleCommandSelect(ctx: CommandContext, command: string) {
@@ -1429,6 +1521,70 @@ function skillPickerBlocks(skills: SkillDef[], filter: string, rawText: string, 
   ];
 }
 
+function sessionQuickActionBlocks(language: LanguageCode, text: string): any[] {
+  const labels = language === "ko"
+    ? {
+        newSameRepo: "새 세션",
+        bindRecent: "최근 연결",
+        unbindSession: "세션 해제",
+        status: "상태",
+        recent: "최근 목록"
+      }
+    : {
+        newSameRepo: "New session",
+        bindRecent: "Bind recent",
+        unbindSession: "Unbind",
+        status: "Status",
+        recent: "Recent"
+      };
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        sessionActionButton(labels.newSameRepo, "new-same-repo", "primary"),
+        sessionActionButton(labels.bindRecent, "bind-recent"),
+        sessionActionButton(labels.unbindSession, "unbind-session", "danger"),
+        sessionActionButton(labels.status, "status"),
+        sessionActionButton(labels.recent, "recent")
+      ]
+    }
+  ];
+}
+
+function sessionActionButton(label: string, command: string, style?: "primary" | "danger"): any {
+  return {
+    type: "button",
+    action_id: "codex_session_action",
+    text: { type: "plain_text", text: label },
+    value: JSON.stringify({ kind: "session-action", command } satisfies AssistActionValue),
+    ...(style ? { style } : {})
+  };
+}
+
+function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThreadBinding | undefined, language: LanguageCode): string {
+  const lines = language === "ko"
+    ? [
+        "*빠른 세션 작업*",
+        `cwd: ${codeInline(workspace.cwd)}`,
+        workspace.projectName ? `project: ${codeInline(workspace.projectName)}` : undefined,
+        binding?.codexThreadId ? `session: ${codeInline(binding.codexThreadId)}` : "session: none",
+        binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
+        "",
+        "`새 세션`은 같은 repo/cwd에 새 thread를 만들고 연결합니다. 이후 thread에 짧게 메시지를 보내면 Codex 입력으로 들어갑니다."
+      ]
+    : [
+        "*Quick session actions*",
+        `cwd: ${codeInline(workspace.cwd)}`,
+        workspace.projectName ? `project: ${codeInline(workspace.projectName)}` : undefined,
+        binding?.codexThreadId ? `session: ${codeInline(binding.codexThreadId)}` : "session: none",
+        binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
+        "",
+        "`New session` creates and links a new thread for the same repo/cwd. Send a short message in that thread to use it as Codex input."
+      ];
+  return lines.filter(Boolean).join("\n");
+}
+
 function bindSessionPickerBlocks(sessions: SlackThreadBinding[], language: LanguageCode): any[] {
   const options = sessions
     .filter((session) => session.codexThreadId)
@@ -1591,11 +1747,13 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `?` / `commands <prefix>`: 명령어 선택 메뉴",
       "- `$` / `$prefix`: 스킬 선택 메뉴",
       "- `pwd`, `ls`, `cd <path>`: 작업공간 탐색",
+      "- `session` / `s`: 새 세션, 최근 연결, 해제 버튼 메뉴",
       "- `new [-f] <prompt>`: 새 세션 대기/즉시 실행",
       "- `send [-f] <prompt>`: 현재 세션에 입력",
       "- `recent`: Slack/로컬 CLI 세션 목록",
       "- `resume <number|id|last>`: 최근 목록에서 번호/ID로 세션 연결",
       "- `bind-session [number|id|last]`: 현재 channel/thread를 세션에 연결",
+      "- `unbind-session`: 현재 세션 연결 해제",
       "- `active`: 실행 중인 CLI 세션 목록",
       "- `active --channel <name> <number>`: active CLI 세션으로 채널 생성/연결",
       "- `history [session]`: 세션 내 이전 명령 보기",
@@ -1612,11 +1770,13 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `?` / `commands <prefix>`: command picker",
     "- `$` / `$prefix`: skill picker",
     "- `pwd`, `ls`, `cd <path>`: browse workspace",
+    "- `session` / `s`: buttons for new session, bind recent, and unbind",
     "- `new [-f] <prompt>`: queue/start a new session",
     "- `send [-f] <prompt>`: continue current session",
     "- `recent`: Slack/local CLI sessions",
     "- `resume <number|id|last>`: bind a session from the recent list",
     "- `bind-session [number|id|last]`: bind this channel/thread to a session",
+    "- `unbind-session`: remove the current session binding",
     "- `active`: running CLI sessions",
     "- `active --channel <name> <number>`: create/link a channel from an active CLI session",
     "- `history [session]`: show commands sent in a session",

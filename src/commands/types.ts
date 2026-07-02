@@ -12,6 +12,8 @@ export type CommandName =
   | "pwd"
   | "new"
   | "send"
+  | "session"
+  | "s"
   | "steer"
   | "resume"
   | "rerun"
@@ -29,6 +31,7 @@ export type CommandName =
   | "stop"
   | "bind-channel"
   | "bind-session"
+  | "unbind-session"
   | "unbind-channel";
 
 export interface ParsedCommand {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandTarget, normalizeSlackMessageText, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
+import { commandTarget, isPlainSlackChannelMessage, normalizeSlackMessageText, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
 
 describe("command parser", () => {
   it("tokenizes quoted args", () => {
@@ -37,7 +37,10 @@ describe("command parser", () => {
   it("parses recent session commands", () => {
     expect(parseCommand("recent").name).toBe("recent");
     expect(parseCommand("active --channel repo 1").name).toBe("active");
+    expect(parseCommand("session").name).toBe("session");
+    expect(parseCommand("s").name).toBe("s");
     expect(parseCommand("bind-session 2").name).toBe("bind-session");
+    expect(parseCommand("unbind-session").name).toBe("unbind-session");
     expect(parseCommand("history 2").name).toBe("history");
     expect(parseCommand("rerun-command 3 2").name).toBe("rerun-command");
     expect(parseCommand("resume 2 continue work").args).toEqual(["2", "continue", "work"]);
@@ -90,5 +93,9 @@ describe("command parser", () => {
     expect(normalizeSlackMessageText("!codex pwd", "!codex", false)).toBe("pwd");
     expect(normalizeSlackMessageText("/codex pwd", "!codex", false)).toBeUndefined();
     expect(normalizeSlackMessageText("/codex pwd", "!codex", true)).toBeUndefined();
+    expect(isPlainSlackChannelMessage("s", "!codex", false)).toBe(true);
+    expect(isPlainSlackChannelMessage("pwd", "!codex", false)).toBe(true);
+    expect(isPlainSlackChannelMessage("!codex pwd", "!codex", false)).toBe(false);
+    expect(isPlainSlackChannelMessage("/codex pwd", "!codex", false)).toBe(false);
   });
 });

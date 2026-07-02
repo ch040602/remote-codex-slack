@@ -143,6 +143,17 @@ export class Store {
     this.save();
   }
 
+  removeThreadBinding(key: string): SlackThreadBinding | undefined {
+    const current = this.state.threadBindings[key];
+    if (!current) return undefined;
+    delete this.state.threadBindings[key];
+    if (current.codexThreadId && this.state.codexThreadToSlackKey[current.codexThreadId] === key) {
+      delete this.state.codexThreadToSlackKey[current.codexThreadId];
+    }
+    this.save();
+    return current;
+  }
+
   updateThread(key: string, patch: Partial<SlackThreadBinding>): SlackThreadBinding {
     const current = this.state.threadBindings[key];
     if (!current) throw new Error(`No Slack thread binding: ${key}`);

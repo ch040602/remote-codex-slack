@@ -7,6 +7,8 @@ describe("command suggestions", () => {
     expect(commandSuggestions("rerun-s").map((suggestion) => suggestion.entry.name)).toContain("rerun-session");
     expect(commandSuggestions("hist").map((suggestion) => suggestion.entry.name)).toContain("history");
     expect(commandSuggestions("active").map((suggestion) => suggestion.entry.name)).toContain("active");
+    expect(commandSuggestions("s").map((suggestion) => suggestion.entry.name)).toContain("session");
+    expect(commandSuggestions("unbind-s").map((suggestion) => suggestion.entry.name)).toContain("unbind-session");
   });
 
   it("suggests commands by small typos", () => {

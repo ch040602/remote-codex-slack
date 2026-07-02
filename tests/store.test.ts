@@ -45,4 +45,26 @@ describe("Store pending commands", () => {
     expect(store.listSessionCommands({ key: "C1:1.0" }).map((command) => command.prompt)).toEqual(["fix tests"]);
     expect(store.listSessionCommands({ key: "other", codexThreadId: "019f20cf-7b8a-7c52-b037-d90afad6fd44" }).map((command) => command.prompt)).toEqual(["fix tests"]);
   });
+
+  it("removes thread bindings and their Codex lookup", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-slack-store-unbind-"));
+    const store = new Store(path.join(dir, "state.json"));
+    store.load();
+
+    store.upsertThreadBinding({
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      codexThreadId: "019f20cf-7b8a-7c52-b037-d90afad6fd44",
+      status: "idle",
+      createdAt: "2026-07-02T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      createdBy: "U1"
+    });
+
+    expect(store.removeThreadBinding("C1:1.0")?.codexThreadId).toBe("019f20cf-7b8a-7c52-b037-d90afad6fd44");
+    expect(store.getThreadBinding("C1:1.0")).toBeUndefined();
+    expect(store.getThreadBindingByCodexThread("019f20cf-7b8a-7c52-b037-d90afad6fd44")).toBeUndefined();
+  });
 });

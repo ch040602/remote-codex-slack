@@ -130,12 +130,28 @@ Slash command settings:
 Command: /codex
 Request URL: leave any valid placeholder if Slack requires one; Socket Mode delivers the command to Bolt.
 Short description: Control local Codex
-Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | bind-session | new [-f] <prompt> | send [-f] <prompt> | recent
+Usage hint: s | ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent
 ```
 
 Slack slash commands do not execute inside threads. Use an `@bot` mention or the configured message prefix inside threads.
 
 After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` and queued for Codex by default. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
+
+Quick session actions:
+
+```text
+/codex s
+/codex session
+```
+
+This opens a button menu for the current repo/channel:
+
+- `New session`: create and link a new thread for the same cwd/repo.
+- `Bind recent`: choose an existing Slack or local Codex CLI session.
+- `Unbind`: remove the current session binding while keeping the channel workspace.
+- `Status` and `Recent`: inspect the current or recent sessions.
+
+On desktop, type `/codex s` and click a button. On mobile, type `/codex s`, send it, then tap the button or picker in the bot response.
 
 ## Environment
 
@@ -303,6 +319,16 @@ Skill picker menus work the same way:
 When a prompt contains `$` or an unfinished `$prefix`, the bridge shows matching configured skills. Choosing a skill replaces that token in the original command and continues the normal flow. Since commands queue by default, choosing a skill in `new` or `send` normally creates a pending command unless you included `-f`.
 
 Normal bound-channel messages also participate in this flow. For example, sending `fix tests with $rev` opens the skill picker for `$rev`; sending `/codex pwd` runs a bot command instead of forwarding `/codex pwd` to Codex.
+
+## Quick Session Actions
+
+Use the shortest flow when you do not want to remember full commands:
+
+```text
+/codex s
+```
+
+The response includes buttons for `New session`, `Bind recent`, `Unbind`, `Status`, and `Recent`. `New session` uses the same repo/cwd as the current channel and creates a new Slack thread tied to that workspace. In CLI mode, the Codex session ID appears after the first Codex turn starts; send a normal message in that new thread to start work, or use `send -f <prompt>` to run immediately.
 
 ## Running
 
@@ -537,6 +563,15 @@ Change the current Slack thread workspace:
 !codex cd web
 ```
 
+Open the quick session menu:
+
+```text
+/codex s
+/codex session
+```
+
+Use the buttons to create a new same-repo session thread, bind a recent session, unbind the current session, or inspect status/recent sessions. This is the recommended desktop and mobile flow for day-to-day use.
+
 Start a new Codex session:
 
 ```text
@@ -592,12 +627,14 @@ Resume an existing Codex thread:
 Bind the current channel or thread to a recent Codex session:
 
 ```text
+/codex s
 /codex bind-session
 /codex bind-session 2
 /codex bind-session 019f20cf
+/codex unbind-session
 ```
 
-Without an argument, `bind-session` shows a recent-session picker. After binding, channel/thread messages sent with `send`, `$skill ...`, or the configured prefix continue that Codex session.
+Without an argument, `bind-session` shows a recent-session picker. `/codex s` exposes the same picker behind `Bind recent` and also includes `New session` and `Unbind`. After binding, normal channel messages, `send`, `$skill ...`, or the configured prefix continue that Codex session.
 
 Explore recent sessions:
 

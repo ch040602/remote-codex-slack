@@ -14,6 +14,8 @@ const KNOWN = new Set<CommandName>([
   "pwd",
   "new",
   "send",
+  "session",
+  "s",
   "steer",
   "resume",
   "rerun",
@@ -31,6 +33,7 @@ const KNOWN = new Set<CommandName>([
   "stop",
   "bind-channel",
   "bind-session",
+  "unbind-session",
   "unbind-channel"
 ]);
 
@@ -56,6 +59,13 @@ export function normalizeSlackMessageText(text: string, commandPrefix: string, i
   const trimmed = text.trim();
   if (!trimmed || trimmed.startsWith("/")) return undefined;
   return isDirectMessage ? trimmed : `send ${trimmed}`;
+}
+
+export function isPlainSlackChannelMessage(text: string, commandPrefix: string, isDirectMessage: boolean): boolean {
+  if (isDirectMessage) return false;
+  if (stripPrefix(text, commandPrefix) !== undefined) return false;
+  const trimmed = text.trim();
+  return Boolean(trimmed) && !trimmed.startsWith("/");
 }
 
 export function parseCommand(text: string): ParsedCommand {

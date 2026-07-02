@@ -50,12 +50,20 @@ Create a slash command:
 Command: /codex
 Request URL: use any valid placeholder if Slack requires one; Socket Mode will deliver the command.
 Short description: Control local Codex
-Usage hint: ? | $ | $skill <prompt> | pwd | ls | cd <path> | bind-session | new [-f] <prompt> | send [-f] <prompt> | recent
+Usage hint: s | ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent
 ```
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
 
 After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` and queued for Codex by default. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
+
+For the simplest session workflow, use:
+
+```text
+/codex s
+```
+
+This opens buttons for `New session`, `Bind recent`, `Unbind`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
 
 ## Connect Channels To Projects
 
@@ -98,6 +106,7 @@ Then in Slack:
 ```text
 /codex projects
 /codex bind-channel api
+/codex s
 /codex new $example summarize this repository
 ```
 
@@ -168,11 +177,13 @@ To resume a session from the recent list by number:
 To bind the current channel or thread to a recent session:
 
 ```text
+/codex s
 /codex bind-session
 /codex bind-session 2
+/codex unbind-session
 ```
 
-Without an argument, `bind-session` shows a picker. After binding, normal channel messages, `send`, `$skill ...`, or prefixed messages continue that Codex session.
+Without an argument, `bind-session` shows a picker. `/codex s` gives the same picker behind the `Bind recent` button and also provides `New session` and `Unbind`. After binding, normal channel messages, `send`, `$skill ...`, or prefixed messages continue that Codex session.
 
 `recent` includes sessions started through this Slack bridge and existing local Codex CLI sessions found under `CODEX_SESSIONS_DIR`.
 
