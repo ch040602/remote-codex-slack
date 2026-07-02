@@ -9,6 +9,7 @@ describe("command suggestions", () => {
     expect(commandSuggestions("active").map((suggestion) => suggestion.entry.name)).toContain("active");
     expect(commandSuggestions("s").map((suggestion) => suggestion.entry.name)).toContain("session");
     expect(commandSuggestions("send-m").map((suggestion) => suggestion.entry.name)).toContain("send-mode");
+    expect(commandSuggestions("send-p").map((suggestion) => suggestion.entry.name)).toContain("send-policy");
     expect(commandSuggestions("unbind-s").map((suggestion) => suggestion.entry.name)).toContain("unbind-session");
     expect(commandSuggestions("bind-c").map((suggestion) => suggestion.entry.name)).not.toContain(["bind", "channel"].join("-"));
   });
@@ -27,5 +28,10 @@ describe("command suggestions", () => {
   it("documents force support for rerunning command history", () => {
     const usage = commandSuggestions("rerun-command")[0]?.entry.usage;
     expect(usage).toBe("rerun-command [-f] <command-number> [session]");
+  });
+
+  it("documents send policy modes", () => {
+    const usage = commandSuggestions("send-policy")[0]?.entry.usage;
+    expect(usage).toBe("send-policy immediate|confirm|pending|status");
   });
 });

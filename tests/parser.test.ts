@@ -41,6 +41,8 @@ describe("command parser", () => {
     expect(parseCommand("s").name).toBe("s");
     expect(parseCommand("send-mode off").name).toBe("send-mode");
     expect(parseCommand("send-mode off").args).toEqual(["off"]);
+    expect(parseCommand("send-policy confirm").name).toBe("send-policy");
+    expect(parseCommand("send-policy pending").args).toEqual(["pending"]);
     expect(parseCommand("bind-session 2").name).toBe("bind-session");
     expect(parseCommand(["bind", "channel api"].join("-")).name).toBe("send");
     expect(parseCommand("unbind-session").name).toBe("unbind-session");

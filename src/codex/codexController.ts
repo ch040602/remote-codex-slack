@@ -94,6 +94,9 @@ export class CodexController extends EventEmitter implements CodexRuntime {
       lastPrompt: existing?.lastPrompt,
       lastFinalAnswer: existing?.lastFinalAnswer,
       title: existing?.title,
+      sendMode: existing?.sendMode,
+      sendPolicy: existing?.sendPolicy,
+      language: existing?.language,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       createdBy: existing?.createdBy ?? params.createdBy

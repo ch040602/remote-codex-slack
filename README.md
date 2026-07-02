@@ -130,7 +130,7 @@ Slash command settings:
 Command: /codex
 Request URL: leave any valid placeholder if Slack requires one; Socket Mode delivers the command to Bolt.
 Short description: Control local Codex
-Usage hint: s | send-mode on|off | ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent
+Usage hint: s | send-mode on|off | send-policy immediate|confirm|pending | ? | $ | pwd | ls | cd <path> | send <prompt>
 ```
 
 Slack slash commands do not execute inside threads. Use an `@bot` mention or the configured message prefix inside threads.
@@ -149,7 +149,8 @@ This opens a button menu for the current repo/channel:
 - `New session`: create and link a new thread for the same cwd/repo.
 - `Bind recent`: choose an existing Slack or local Codex CLI session.
 - `Unbind`: remove the current session binding while keeping the channel workspace.
-- `Send mode on/off`: choose whether normal chat is automatically queued as Codex input.
+- `Send mode on/off`: choose whether normal chat is accepted as Codex input.
+- `Immediate`, `Confirm`, `Pending`: choose whether runnable input is sent now, shown with confirm buttons, or queued.
 - `Status` and `Recent`: inspect the current or recent sessions.
 
 On desktop, type `/codex s` and click a button. On mobile, type `/codex s`, send it, then tap the button or picker in the bot response.
@@ -268,7 +269,7 @@ $test-fixer fix the failing CI tests
 !codex send $test-fixer fix the failing CI tests
 ```
 
-In channels where the bot is present and send mode is on, every normal message is treated as Codex input without `!codex send`. A message that starts with `$skill` is therefore queued as a Codex skill prompt. Send `$` or `$prefix` by itself to open the skill picker. When send mode is off, use `/codex send ...`, `!codex send ...`, or an app mention instead.
+In channels where the bot is present and send mode is on, every normal message is treated as Codex input without `!codex send`. The default send policy is `immediate`, so that input is sent to Codex right away. Set `send-policy confirm` to show buttons for Run now, Keep queued, or Cancel, or set `send-policy pending` to queue all runnable input. When send mode is off, use `/codex send ...`, `!codex send ...`, or an app mention instead.
 
 To browse local skills from Slack, send `$` or a prefix lookup:
 
@@ -317,7 +318,7 @@ Skill picker menus work the same way:
 !codex send fix tests with $
 ```
 
-When a prompt contains `$` or an unfinished `$prefix`, the bridge shows matching configured skills. Choosing a skill replaces that token in the original command and continues the normal flow. Since commands queue by default, choosing a skill in `new` or `send` normally creates a pending command unless you included `-f`.
+When a prompt contains `$` or an unfinished `$prefix`, the bridge shows matching configured skills. Choosing a skill replaces that token in the original command and continues the normal flow. The result follows the current `send-policy`: `immediate` sends it, `confirm` shows buttons, and `pending` queues it.
 
 Normal bound-channel messages also participate in this flow while send mode is on. For example, sending `fix tests with $rev` opens the skill picker for `$rev`; sending `/codex pwd` runs a bot command instead of forwarding `/codex pwd` to Codex.
 
@@ -329,7 +330,7 @@ Use the shortest flow when you do not want to remember full commands:
 /codex s
 ```
 
-The response includes buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Status`, and `Recent`. `New session` uses the same repo/cwd as the current channel and creates a new Slack thread tied to that workspace. In CLI mode, the Codex session ID appears after the first Codex turn starts. If send mode is on, send a normal message in that new thread to start work; if it is off, use `send <prompt>` or `send -f <prompt>`.
+The response includes buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Immediate`, `Confirm`, `Pending`, `Status`, and `Recent`. `New session` uses the same repo/cwd as the current channel and creates a new Slack thread tied to that workspace. In CLI mode, the Codex session ID appears after the first Codex turn starts. If send mode is on, send a normal message in that new thread to start work; `send-policy` decides whether it runs immediately, asks for button confirmation, or queues.
 
 ## Running
 

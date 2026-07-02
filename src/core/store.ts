@@ -3,12 +3,14 @@ import path from "node:path";
 
 export type SessionStatus = "idle" | "active" | "completed" | "failed" | "interrupted";
 export type LanguageCode = "en" | "ko";
+export type SendPolicy = "immediate" | "confirm" | "pending";
 
 export interface ChannelBinding {
   channelId: string;
   projectName?: string;
   cwd: string;
   sendMode?: boolean;
+  sendPolicy?: SendPolicy;
   language?: LanguageCode;
   updatedAt: string;
   updatedBy: string;
@@ -28,6 +30,7 @@ export interface SlackThreadBinding {
   sessionCommands?: Array<{ timestamp: string; prompt: string }>;
   title?: string;
   sendMode?: boolean;
+  sendPolicy?: SendPolicy;
   language?: LanguageCode;
   updatedAt: string;
   createdAt: string;

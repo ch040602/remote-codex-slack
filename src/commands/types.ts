@@ -13,6 +13,7 @@ export type CommandName =
   | "new"
   | "send"
   | "send-mode"
+  | "send-policy"
   | "session"
   | "s"
   | "steer"

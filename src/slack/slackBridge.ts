@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveUserPath } from "../config.js";
 import type { BridgeConfig, SkillDef } from "../config.js";
 import type { PathResolver, ResolvedWorkspace } from "../core/pathResolver.js";
-import type { LanguageCode, PendingCommand, SessionCommandRecord, Store, SlackThreadBinding } from "../core/store.js";
+import type { LanguageCode, PendingCommand, SendPolicy, SessionCommandRecord, Store, SlackThreadBinding } from "../core/store.js";
 import type { SkillRegistry } from "../core/skills.js";
 import { listCodexCliSessions, type CodexCliSessionCommand } from "../codex/sessionIndex.js";
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
@@ -30,14 +30,15 @@ interface CommandContext {
 }
 
 interface AssistActionValue {
-  kind: "command" | "skill" | "bind-session" | "session-action";
+  kind: "command" | "skill" | "bind-session" | "session-action" | "pending-action";
   command?: string;
   rawText?: string;
   sessionId?: string;
+  pendingId?: string;
   token?: string;
 }
 
-const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session", "send-mode"]);
+const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session", "send-mode", "send-policy"]);
 
 export class SlackBridge {
   readonly app: App;
@@ -132,6 +133,11 @@ export class SlackBridge {
       await ack();
       await this.handleAssistAction(body, client, respond);
     });
+
+    this.app.action("codex_pending_action", async ({ ack, body, client, respond }: any) => {
+      await ack();
+      await this.handleAssistAction(body, client, respond);
+    });
   }
 
   private async handleCommand(ctx: CommandContext) {
@@ -200,6 +206,9 @@ export class SlackBridge {
           return;
         case "send-mode":
           await this.handleSendMode(ctx, parsed);
+          return;
+        case "send-policy":
+          await this.handleSendPolicy(ctx, parsed);
           return;
         case "session":
         case "s":
@@ -305,6 +314,8 @@ export class SlackBridge {
         lastPrompt: existing?.lastPrompt,
         lastFinalAnswer: existing?.lastFinalAnswer,
         title: existing?.title,
+        sendMode: existing?.sendMode,
+        sendPolicy: existing?.sendPolicy,
         language: existing?.language,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
@@ -377,10 +388,11 @@ export class SlackBridge {
     const workspace = this.currentWorkspace(ctx);
     const binding = this.currentThreadBinding(ctx) ?? this.store.findLatestForChannel(ctx.channelId);
     const sendMode = this.sendModeForContext(ctx);
-    const text = renderSessionQuickText(workspace, binding, language, sendMode);
+    const sendPolicy = this.sendPolicyForContext(ctx);
+    const text = renderSessionQuickText(workspace, binding, language, sendMode, sendPolicy);
     await this.replyWithBlocks(ctx, {
       text,
-      blocks: sessionQuickActionBlocks(language, text, sendMode)
+      blocks: sessionQuickActionBlocks(language, text, sendMode, sendPolicy)
     });
   }
 
@@ -400,6 +412,15 @@ export class SlackBridge {
         return;
       case "send-mode-off":
         await this.setSendMode(ctx, false);
+        return;
+      case "send-policy-immediate":
+        await this.setSendPolicy(ctx, "immediate");
+        return;
+      case "send-policy-confirm":
+        await this.setSendPolicy(ctx, "confirm");
+        return;
+      case "send-policy-pending":
+        await this.setSendPolicy(ctx, "pending");
         return;
       case "status":
         await this.handleStatus(ctx);
@@ -428,15 +449,17 @@ export class SlackBridge {
       createdBy: ctx.userId,
       title: "New session"
     });
-    if (this.sendModeForContext(ctx) === false) {
-      this.store.updateThread(binding.key, { sendMode: false });
+    const sendMode = this.sendModeForContext(ctx);
+    const sendPolicy = this.sendPolicyForContext(ctx);
+    if (sendMode === false || sendPolicy !== "immediate") {
+      this.store.updateThread(binding.key, { sendMode, sendPolicy });
     }
     await this.postThread(ctx.client, threadContext.channelId, threadContext.threadTs, [
       "New same-repo Codex session linked.",
       `cwd: ${codeInline(workspace.cwd)}`,
       binding.codexThreadId ? `codexThreadId: ${codeInline(binding.codexThreadId)}` : "codexThreadId: pending until the first CLI turn starts",
-      this.sendModeForContext(ctx)
-        ? "Send a normal message in this thread to start work, or use `send -f <prompt>` to run immediately."
+      sendMode
+        ? `Send a normal message in this thread to start work. Current send policy: ${codeInline(sendPolicy)}.`
         : "Send mode is off. Use `send <prompt>` / `send -f <prompt>`, or turn send mode on before sending normal chat."
     ].join("\n"));
   }
@@ -448,6 +471,15 @@ export class SlackBridge {
       return;
     }
     await this.setSendMode(ctx, requested);
+  }
+
+  private async handleSendPolicy(ctx: CommandContext, cmd: ParsedCommand) {
+    const requested = normalizeSendPolicy(cmd.args[0]);
+    if (!requested) {
+      await this.reply(ctx, renderSendPolicyStatus(this.sendPolicyForContext(ctx), this.currentLanguage(ctx)));
+      return;
+    }
+    await this.setSendPolicy(ctx, requested);
   }
 
   private async setSendMode(ctx: CommandContext, enabled: boolean) {
@@ -466,6 +498,7 @@ export class SlackBridge {
           cwd: workspace.cwd,
           projectName: workspace.projectName,
           sendMode: enabled,
+          sendPolicy: this.sendPolicyForContext(ctx),
           status: "idle",
           createdAt: now,
           updatedAt: now,
@@ -484,6 +517,43 @@ export class SlackBridge {
       });
     }
     await this.reply(ctx, renderSendModeStatus(enabled, this.currentLanguage(ctx)));
+  }
+
+  private async setSendPolicy(ctx: CommandContext, policy: SendPolicy) {
+    const workspace = this.currentWorkspace(ctx);
+    const now = new Date().toISOString();
+    if (ctx.threadTs) {
+      const key = this.store.threadKey(ctx.channelId, ctx.threadTs);
+      const existing = this.store.getThreadBinding(key);
+      if (existing) {
+        this.store.updateThread(key, { sendPolicy: policy });
+      } else {
+        this.store.upsertThreadBinding({
+          key,
+          channelId: ctx.channelId,
+          threadTs: ctx.threadTs,
+          cwd: workspace.cwd,
+          projectName: workspace.projectName,
+          sendMode: this.sendModeForContext(ctx),
+          sendPolicy: policy,
+          status: "idle",
+          createdAt: now,
+          updatedAt: now,
+          createdBy: ctx.userId
+        });
+      }
+    } else {
+      this.store.setChannelBinding({
+        channelId: ctx.channelId,
+        cwd: workspace.cwd,
+        projectName: workspace.projectName,
+        sendPolicy: policy,
+        language: this.currentLanguage(ctx),
+        updatedAt: now,
+        updatedBy: ctx.userId
+      });
+    }
+    await this.reply(ctx, renderSendPolicyStatus(policy, this.currentLanguage(ctx)));
   }
 
   private async handleUnbindSession(ctx: CommandContext) {
@@ -510,7 +580,8 @@ export class SlackBridge {
         workspace.projectName ? `project: ${codeInline(workspace.projectName)}` : undefined,
         binding?.codexThreadId ? `codexThreadId: ${codeInline(binding.codexThreadId)}` : undefined,
         binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
-        `sendMode: ${codeInline(this.sendModeForContext(ctx) ? "on" : "off")}`
+        `sendMode: ${codeInline(this.sendModeForContext(ctx) ? "on" : "off")}`,
+        `sendPolicy: ${codeInline(this.sendPolicyForContext(ctx))}`
       ]
         .filter(Boolean)
         .join("\n")
@@ -540,17 +611,17 @@ export class SlackBridge {
     }
     if (await this.replyIfUnknownSkills(ctx, prompt)) return;
 
-    if (!isForce(cmd)) {
-      await this.enqueuePending(ctx, {
+    await this.executeBySendPolicy(
+      ctx,
+      cmd,
+      {
         command: "new",
         prompt,
         cwd: workspace.cwd,
         projectName: workspace.projectName
-      });
-      return;
-    }
-
-    await this.startNewTurn(ctx, workspace, prompt);
+      },
+      () => this.startNewTurn(ctx, workspace, prompt)
+    );
   }
 
   private async startNewTurn(ctx: CommandContext, workspace: ResolvedWorkspace, prompt: string) {
@@ -587,11 +658,7 @@ export class SlackBridge {
       return;
     }
     if (await this.replyIfUnknownSkills(ctx, prompt)) return;
-    if (!isForce(cmd)) {
-      await this.enqueuePending(ctx, { command: "send", prompt });
-      return;
-    }
-    await this.startSend(ctx, prompt);
+    await this.executeBySendPolicy(ctx, cmd, { command: "send", prompt }, () => this.startSend(ctx, prompt));
   }
 
   private async startSend(ctx: CommandContext, prompt: string) {
@@ -683,16 +750,16 @@ export class SlackBridge {
     if (!prompt) throw new Error("No previous prompt stored for rerun");
     if (await this.replyIfUnknownSkills(ctx, prompt)) return;
 
-    if (!isForce(cmd)) {
-      await this.enqueuePending(ctx, {
+    await this.executeBySendPolicy(
+      ctx,
+      cmd,
+      {
         command: "rerun",
         prompt,
         selector: selected.selectorLabel
-      });
-      return;
-    }
-
-    await this.startRerun(ctx, binding, prompt, selected.selectorLabel);
+      },
+      () => this.startRerun(ctx, binding, prompt, selected.selectorLabel)
+    );
   }
 
   private async handleRerunSession(ctx: CommandContext, cmd: ParsedCommand) {
@@ -707,16 +774,16 @@ export class SlackBridge {
     if (!prompt) throw new Error("No previous prompt stored for selected session");
     if (await this.replyIfUnknownSkills(ctx, prompt)) return;
 
-    if (!isForce(cmd)) {
-      await this.enqueuePending(ctx, {
+    await this.executeBySendPolicy(
+      ctx,
+      cmd,
+      {
         command: "rerun-session",
         prompt,
         selector
-      });
-      return;
-    }
-
-    await this.startRerun(ctx, binding, prompt, selector);
+      },
+      () => this.startRerun(ctx, binding, prompt, selector)
+    );
   }
 
   private async startRerun(ctx: CommandContext, binding: SlackThreadBinding, prompt: string, selectorLabel?: string) {
@@ -825,16 +892,16 @@ export class SlackBridge {
     if (!selected) throw new Error(`No command found for selector: ${commandSelector}`);
     if (await this.replyIfUnknownSkills(ctx, selected.prompt)) return;
 
-    if (!isForce(cmd)) {
-      await this.enqueuePending(ctx, {
+    await this.executeBySendPolicy(
+      ctx,
+      cmd,
+      {
         command: "rerun-command",
         prompt: selected.prompt,
         selector: sessionSelector ?? binding.codexThreadId
-      });
-      return;
-    }
-
-    await this.startRerun(ctx, binding, selected.prompt, `${sessionSelector ?? "current"}:${commandSelector}`);
+      },
+      () => this.startRerun(ctx, binding, selected.prompt, `${sessionSelector ?? "current"}:${commandSelector}`)
+    );
   }
 
   private async handleStatus(ctx: CommandContext) {
@@ -848,6 +915,7 @@ export class SlackBridge {
       `status: ${codeInline(binding.status)}`,
       `cwd: ${codeInline(binding.cwd)}`,
       `sendMode: ${codeInline(this.sendModeForContext(ctx) ? "on" : "off")}`,
+      `sendPolicy: ${codeInline(this.sendPolicyForContext(ctx))}`,
       binding.activeTurnId ? `activeTurnId: ${codeInline(binding.activeTurnId)}` : undefined,
       binding.lastPrompt ? `lastPrompt: ${binding.lastPrompt.slice(0, 300)}` : undefined,
       binding.lastFinalAnswer ? `lastFinalAnswer:\n${binding.lastFinalAnswer.slice(0, 1000)}` : undefined
@@ -933,6 +1001,78 @@ export class SlackBridge {
     }
   }
 
+  private async handlePendingAction(ctx: CommandContext, pendingId: string, action: string) {
+    const pending = this.store.getPendingCommand(pendingId);
+    if (!pending) {
+      await this.reply(ctx, "Pending command was already handled or removed.");
+      return;
+    }
+
+    if (action === "run") {
+      await this.runPendingCommand(ctx, pending);
+      this.store.removePendingCommand(pending.id);
+      await this.reply(ctx, `Ran pending command ${codeInline(pending.id)}.`);
+      return;
+    }
+
+    if (action === "queue") {
+      const index = this.store.listPendingCommands(pending.scopeKey).findIndex((item) => item.id === pending.id) + 1;
+      await this.reply(ctx, [
+        `Kept pending command ${codeInline(pending.id)} in the queue.`,
+        index > 0 ? `Run later: ${codeInline(`pending-run ${index}`)}` : undefined,
+        index > 0 ? `Edit: ${codeInline(`pending-edit ${index} <new prompt>`)}` : undefined
+      ].filter(Boolean).join("\n"));
+      return;
+    }
+
+    if (action === "cancel") {
+      this.store.removePendingCommand(pending.id);
+      await this.reply(ctx, `Cancelled pending command ${codeInline(pending.id)}.`);
+      return;
+    }
+
+    await this.reply(ctx, `Unknown pending action: ${action}`);
+  }
+
+  private async executeBySendPolicy(
+    ctx: CommandContext,
+    cmd: ParsedCommand,
+    pending: Omit<PendingCommand, "id" | "scopeKey" | "channelId" | "threadTs" | "createdAt" | "updatedAt" | "createdBy">,
+    runNow: () => Promise<void>
+  ) {
+    if (isForce(cmd)) {
+      await runNow();
+      return;
+    }
+
+    const policy = this.sendPolicyForContext(ctx);
+    if (policy === "immediate") {
+      await runNow();
+      return;
+    }
+    if (policy === "confirm") {
+      await this.confirmPending(ctx, pending);
+      return;
+    }
+    await this.enqueuePending(ctx, pending);
+  }
+
+  private async confirmPending(ctx: CommandContext, pending: Omit<PendingCommand, "id" | "scopeKey" | "channelId" | "threadTs" | "createdAt" | "updatedAt" | "createdBy">) {
+    const saved = this.store.addPendingCommand({
+      ...pending,
+      scopeKey: this.pendingScopeKey(ctx),
+      channelId: ctx.channelId,
+      threadTs: ctx.threadTs,
+      createdBy: ctx.userId
+    });
+    const language = this.currentLanguage(ctx);
+    const text = renderPendingConfirmation(saved, language);
+    await this.replyWithBlocks(ctx, {
+      text,
+      blocks: pendingConfirmationBlocks(saved, language, text)
+    });
+  }
+
   private async enqueuePending(ctx: CommandContext, pending: Omit<PendingCommand, "id" | "scopeKey" | "channelId" | "threadTs" | "createdAt" | "updatedAt" | "createdBy">) {
     const saved = this.store.addPendingCommand({
       ...pending,
@@ -1006,6 +1146,8 @@ export class SlackBridge {
           cwd: workspace.cwd,
           projectName: workspace.projectName,
           status: "idle",
+          sendMode: this.sendModeForContext(ctx),
+          sendPolicy: this.sendPolicyForContext(ctx),
           language: requested,
           createdAt: now,
           updatedAt: now,
@@ -1057,6 +1199,15 @@ export class SlackBridge {
     const storedChannel = this.store.getChannelBinding(channelId);
     if (storedChannel?.sendMode !== undefined) return storedChannel.sendMode;
     return true;
+  }
+
+  private sendPolicyForContext(ctx: CommandContext): SendPolicy {
+    if (ctx.threadTs) {
+      const binding = this.store.getThreadBinding(this.store.threadKey(ctx.channelId, ctx.threadTs));
+      if (binding?.sendPolicy) return binding.sendPolicy;
+    }
+    const storedChannel = this.store.getChannelBinding(ctx.channelId);
+    return storedChannel?.sendPolicy ?? "immediate";
   }
 
   private workspaceFromCommandOrContext(ctx: CommandContext, cmd: ParsedCommand): ResolvedWorkspace {
@@ -1187,6 +1338,7 @@ export class SlackBridge {
       channelId,
       cwd: session.cwd,
       projectName: session.projectName,
+      sendPolicy: this.sendPolicyForContext(ctx),
       language: this.currentLanguage(ctx),
       updatedAt: new Date().toISOString(),
       updatedBy: ctx.userId
@@ -1197,7 +1349,7 @@ export class SlackBridge {
         `Channel linked from recent session ${codeInline(session.codexThreadId)}.`,
         `cwd: ${codeInline(session.cwd)}`,
         session.lastFinalAnswer ? `last response:\n${indentBlock(session.lastFinalAnswer)}` : undefined,
-        "Send a normal channel message here to continue the session. Messages queue by default; use `/codex send -f ...` or `!codex send -f ...` to execute immediately."
+        `Send a normal channel message here to continue the session. Current send policy: ${codeInline(this.sendPolicyForContext(ctx))}. Use \`send-policy confirm\` or \`send-policy pending\` for safer review.`
       ].filter(Boolean).join("\n")
     });
     if (posted.ts) {
@@ -1214,6 +1366,7 @@ export class SlackBridge {
         lastFinalAnswer: session.lastFinalAnswer,
         sessionCommands: session.sessionCommands,
         title: session.title,
+        sendPolicy: this.sendPolicyForContext(ctx),
         language: this.currentLanguage(ctx),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1241,6 +1394,7 @@ export class SlackBridge {
       sessionCommands: session.sessionCommands,
       title: session.title,
       sendMode: this.sendModeForContext(ctx),
+      sendPolicy: this.sendPolicyForContext(ctx),
       language: this.currentLanguage(ctx),
       createdAt: now,
       updatedAt: now,
@@ -1259,7 +1413,7 @@ export class SlackBridge {
       `Bound this ${ctx.threadTs ? "thread" : "channel"} to Codex session ${codeInline(session.codexThreadId)}.`,
       `cwd: ${codeInline(session.cwd)}`,
       this.sendModeForContext(ctx)
-        ? "Send mode is on: normal channel messages, `send`, `$skill ...`, and prefixed messages continue this session."
+        ? `Send mode is on: normal channel messages, \`send\`, \`$skill ...\`, and prefixed messages continue this session. Send policy: ${codeInline(this.sendPolicyForContext(ctx))}.`
         : "Send mode is off: use `send <prompt>`, `$skill ...`, or the configured prefix to continue this session.",
       "Messages starting with `/` stay Slack bot commands."
     ].join("\n"));
@@ -1412,6 +1566,11 @@ export class SlackBridge {
 
     if (value.kind === "session-action" && value.command) {
       await this.handleSessionAction(ctx, value.command);
+      return;
+    }
+
+    if (value.kind === "pending-action" && value.pendingId && value.command) {
+      await this.handlePendingAction(ctx, value.pendingId, value.command);
       return;
     }
   }
@@ -1579,13 +1738,68 @@ function skillPickerBlocks(skills: SkillDef[], filter: string, rawText: string, 
   ];
 }
 
-function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode: boolean): any[] {
+function pendingConfirmationBlocks(command: PendingCommand, language: LanguageCode, text: string): any[] {
+  const labels = language === "ko"
+    ? { run: "지금 실행", queue: "대기열 유지", cancel: "취소" }
+    : { run: "Run now", queue: "Keep queued", cancel: "Cancel" };
+  return [
+    { type: "section", text: { type: "mrkdwn", text } },
+    {
+      type: "actions",
+      elements: [
+        pendingActionButton(labels.run, command.id, "run", "primary"),
+        pendingActionButton(labels.queue, command.id, "queue"),
+        pendingActionButton(labels.cancel, command.id, "cancel", "danger")
+      ]
+    }
+  ];
+}
+
+function pendingActionButton(label: string, pendingId: string, command: string, style?: "primary" | "danger"): any {
+  return {
+    type: "button",
+    action_id: "codex_pending_action",
+    text: { type: "plain_text", text: label },
+    value: JSON.stringify({ kind: "pending-action", pendingId, command } satisfies AssistActionValue),
+    ...(style ? { style } : {})
+  };
+}
+
+function renderPendingConfirmation(command: PendingCommand, language: LanguageCode): string {
+  const lines = language === "ko"
+    ? [
+        "*Codex 실행 확인*",
+        `command: ${codeInline(command.command)}`,
+        `id: ${codeInline(command.id)}`,
+        command.cwd ? `cwd: ${codeInline(command.cwd)}` : undefined,
+        command.selector ? `selector: ${codeInline(command.selector)}` : undefined,
+        command.prompt ? `prompt: ${preview(command.prompt, 500)}` : undefined,
+        "",
+        "어떻게 처리할지 선택하세요."
+      ]
+    : [
+        "*Confirm Codex execution*",
+        `command: ${codeInline(command.command)}`,
+        `id: ${codeInline(command.id)}`,
+        command.cwd ? `cwd: ${codeInline(command.cwd)}` : undefined,
+        command.selector ? `selector: ${codeInline(command.selector)}` : undefined,
+        command.prompt ? `prompt: ${preview(command.prompt, 500)}` : undefined,
+        "",
+        "Choose how to handle this command."
+      ];
+  return lines.filter(Boolean).join("\n");
+}
+
+function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode: boolean, sendPolicy: SendPolicy): any[] {
   const labels = language === "ko"
     ? {
         newSameRepo: "새 세션",
         bindRecent: "최근 연결",
         unbindSession: "세션 해제",
         sendModeToggle: sendMode ? "Send mode 끄기" : "Send mode 켜기",
+        immediate: "즉시 실행",
+        confirm: "버튼 확인",
+        pending: "모두 대기",
         status: "상태",
         recent: "최근 목록"
       }
@@ -1594,6 +1808,9 @@ function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode
         bindRecent: "Bind recent",
         unbindSession: "Unbind",
         sendModeToggle: sendMode ? "Send mode off" : "Send mode on",
+        immediate: "Immediate",
+        confirm: "Confirm",
+        pending: "Pending",
         status: "Status",
         recent: "Recent"
       };
@@ -1606,6 +1823,9 @@ function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode
         sessionActionButton(labels.bindRecent, "bind-recent"),
         sessionActionButton(labels.unbindSession, "unbind-session", "danger"),
         sessionActionButton(labels.sendModeToggle, sendMode ? "send-mode-off" : "send-mode-on"),
+        sessionActionButton(labels.immediate, "send-policy-immediate", sendPolicy === "immediate" ? "primary" : undefined),
+        sessionActionButton(labels.confirm, "send-policy-confirm", sendPolicy === "confirm" ? "primary" : undefined),
+        sessionActionButton(labels.pending, "send-policy-pending", sendPolicy === "pending" ? "primary" : undefined),
         sessionActionButton(labels.status, "status"),
         sessionActionButton(labels.recent, "recent")
       ]
@@ -1623,7 +1843,7 @@ function sessionActionButton(label: string, command: string, style?: "primary" |
   };
 }
 
-function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThreadBinding | undefined, language: LanguageCode, sendMode: boolean): string {
+function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThreadBinding | undefined, language: LanguageCode, sendMode: boolean, sendPolicy: SendPolicy): string {
   const lines = language === "ko"
     ? [
         "*빠른 세션 작업*",
@@ -1632,9 +1852,10 @@ function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThre
         binding?.codexThreadId ? `session: ${codeInline(binding.codexThreadId)}` : "session: none",
         binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
         `send mode: ${codeInline(sendMode ? "on" : "off")}`,
+        `send policy: ${codeInline(sendPolicy)}`,
         "",
         sendMode
-          ? "`새 세션`은 같은 repo/cwd에 새 thread를 만들고 연결합니다. 일반 메시지는 Codex 입력으로 들어갑니다."
+          ? "`새 세션`은 같은 repo/cwd에 새 thread를 만들고 연결합니다. 일반 메시지는 Codex 입력으로 들어가고 send policy에 따라 처리됩니다."
           : "Send mode가 꺼져 있으면 일반 대화는 Codex로 보내지지 않습니다. 명시적으로 `send <prompt>`를 사용하세요."
       ]
     : [
@@ -1644,9 +1865,10 @@ function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThre
         binding?.codexThreadId ? `session: ${codeInline(binding.codexThreadId)}` : "session: none",
         binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
         `send mode: ${codeInline(sendMode ? "on" : "off")}`,
+        `send policy: ${codeInline(sendPolicy)}`,
         "",
         sendMode
-          ? "`New session` creates and links a new thread for the same repo/cwd. Normal messages are used as Codex input."
+          ? "`New session` creates and links a new thread for the same repo/cwd. Normal messages are handled by the send policy."
           : "When send mode is off, normal chat is not sent to Codex. Use explicit `send <prompt>` commands."
       ];
   return lines.filter(Boolean).join("\n");
@@ -1829,12 +2051,20 @@ function normalizeSendMode(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
+function normalizeSendPolicy(value: string | undefined): SendPolicy | undefined {
+  const normalized = (value ?? "status").trim().toLowerCase();
+  if (["immediate", "now", "run", "direct", "즉시", "즉시실행"].includes(normalized)) return "immediate";
+  if (["confirm", "ask", "button", "buttons", "확인", "버튼"].includes(normalized)) return "confirm";
+  if (["pending", "queue", "queued", "all-pending", "대기", "대기열"].includes(normalized)) return "pending";
+  return undefined;
+}
+
 function renderSendModeStatus(enabled: boolean, language: LanguageCode): string {
   if (language === "ko") {
     return [
       `Send mode: ${codeInline(enabled ? "on" : "off")}`,
       enabled
-        ? "일반 채널/스레드 메시지는 Codex 입력으로 대기열에 들어갑니다."
+        ? "일반 채널/스레드 메시지는 Codex 입력으로 들어갑니다. 실행 방식은 `send-policy`가 결정합니다."
         : "일반 채널/스레드 메시지는 Codex로 보내지지 않습니다. `/codex send ...`, `!codex send ...`, 또는 mention/DM을 사용하세요.",
       "변경: `send-mode on` / `send-mode off`"
     ].join("\n");
@@ -1842,9 +2072,34 @@ function renderSendModeStatus(enabled: boolean, language: LanguageCode): string 
   return [
     `Send mode: ${codeInline(enabled ? "on" : "off")}`,
     enabled
-      ? "Normal channel/thread messages are queued as Codex input."
+      ? "Normal channel/thread messages are accepted as Codex input. Execution is controlled by `send-policy`."
       : "Normal channel/thread messages are not sent to Codex. Use `/codex send ...`, `!codex send ...`, mentions, or DMs.",
     "Change: `send-mode on` / `send-mode off`"
+  ].join("\n");
+}
+
+function renderSendPolicyStatus(policy: SendPolicy, language: LanguageCode): string {
+  if (language === "ko") {
+    const description = {
+      immediate: "명령을 바로 Codex로 전송합니다. 기본값입니다.",
+      confirm: "명령마다 버튼으로 `지금 실행`, `대기열 유지`, `취소`를 선택합니다.",
+      pending: "실행성 명령을 모두 대기열에 넣습니다. `pending-run`으로 실행합니다."
+    } satisfies Record<SendPolicy, string>;
+    return [
+      `Send policy: ${codeInline(policy)}`,
+      description[policy],
+      "변경: `send-policy immediate` / `send-policy confirm` / `send-policy pending`"
+    ].join("\n");
+  }
+  const description = {
+    immediate: "Commands are sent to Codex immediately. This is the default.",
+    confirm: "Each command shows buttons for Run now, Keep queued, or Cancel.",
+    pending: "Runnable commands are queued. Use `pending-run` to execute them."
+  } satisfies Record<SendPolicy, string>;
+  return [
+    `Send policy: ${codeInline(policy)}`,
+    description[policy],
+    "Change: `send-policy immediate` / `send-policy confirm` / `send-policy pending`"
   ].join("\n");
 }
 
@@ -1856,9 +2111,10 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `$` / `$prefix`: 스킬 선택 메뉴",
       "- `pwd`, `ls`, `cd <path>`: 작업공간 탐색",
       "- `session` / `s`: 새 세션, 최근 연결, 해제 버튼 메뉴",
-      "- `new [-f] <prompt>`: 새 세션 대기/즉시 실행",
-      "- `send [-f] <prompt>`: 현재 세션에 입력",
+      "- `new [-f] <prompt>`: send policy에 따라 새 세션 시작",
+      "- `send [-f] <prompt>`: send policy에 따라 현재 세션에 입력",
       "- `send-mode on|off|status`: 일반 대화 자동 입력 켜기/끄기",
+      "- `send-policy immediate|confirm|pending`: 즉시 실행/버튼 확인/전체 대기열 모드",
       "- `recent`: Slack/로컬 CLI 세션 목록",
       "- `resume <number|id|last>`: 최근 목록에서 번호/ID로 세션 연결",
       "- `bind-session [number|id|last]`: 현재 channel/thread를 세션에 연결",
@@ -1866,11 +2122,11 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `active`: 실행 중인 CLI 세션 목록",
       "- `active --channel <name> <number>`: active CLI 세션으로 채널 생성/연결",
       "- `history [session]`: 세션 내 이전 명령 보기",
-      "- `rerun-command [-f] <number> [session]`: 이력 명령 대기/즉시 재실행",
+      "- `rerun-command [-f] <number> [session]`: send policy에 따라 이력 명령 재실행",
       "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: 대기 명령 관리",
       "- `language en|ko`: 안내 언어 변경",
       "",
-      `Send mode가 켜져 있을 때만 일반 채널 메시지가 현재 세션 입력으로 대기열에 저장됩니다. 즉시 실행하려면 \`-f\`를 붙이세요. \`/\`로 시작하는 입력은 Slack bot command로만 처리됩니다. Thread에서는 \`${prefix}\` 또는 @bot을 사용하세요.`
+      `Send mode가 켜져 있을 때만 일반 채널 메시지가 현재 세션 입력으로 들어갑니다. 기본 send policy는 \`immediate\`이고, \`confirm\` 또는 \`pending\`으로 바꿀 수 있습니다. \`/\`로 시작하는 입력은 Slack bot command로만 처리됩니다. Thread에서는 \`${prefix}\` 또는 @bot을 사용하세요.`
     ].join("\n");
   }
 
@@ -1880,9 +2136,10 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `$` / `$prefix`: skill picker",
     "- `pwd`, `ls`, `cd <path>`: browse workspace",
     "- `session` / `s`: buttons for new session, bind recent, and unbind",
-    "- `new [-f] <prompt>`: queue/start a new session",
-    "- `send [-f] <prompt>`: continue current session",
+    "- `new [-f] <prompt>`: start a new session by send policy",
+    "- `send [-f] <prompt>`: continue current session by send policy",
     "- `send-mode on|off|status`: toggle normal-chat auto input",
+    "- `send-policy immediate|confirm|pending`: immediate, button-confirmed, or queued execution",
     "- `recent`: Slack/local CLI sessions",
     "- `resume <number|id|last>`: bind a session from the recent list",
     "- `bind-session [number|id|last]`: bind this channel/thread to a session",
@@ -1890,10 +2147,10 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `active`: running CLI sessions",
     "- `active --channel <name> <number>`: create/link a channel from an active CLI session",
     "- `history [session]`: show commands sent in a session",
-    "- `rerun-command [-f] <number> [session]`: queue/rerun a history command",
+    "- `rerun-command [-f] <number> [session]`: rerun a history command by send policy",
     "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: manage queued commands",
     "- `language en|ko`: change help language",
     "",
-    `Normal channel messages queue as current-session input only when send mode is on. Add \`-f\` to run immediately. Messages starting with \`/\` stay Slack bot commands. In threads, use \`${prefix}\` or @bot.`
+    `Normal channel messages become current-session input only when send mode is on. The default send policy is \`immediate\`; switch to \`confirm\` or \`pending\` when you want more review. Messages starting with \`/\` stay Slack bot commands. In threads, use \`${prefix}\` or @bot.`
   ].join("\n");
 }

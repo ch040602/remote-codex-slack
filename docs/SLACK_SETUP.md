@@ -50,12 +50,12 @@ Create a slash command:
 Command: /codex
 Request URL: use any valid placeholder if Slack requires one; Socket Mode will deliver the command.
 Short description: Control local Codex
-Usage hint: s | send-mode on|off | ? | $ | pwd | ls | cd <path> | new [-f] <prompt> | send [-f] <prompt> | recent
+Usage hint: s | send-mode on|off | send-policy immediate|confirm|pending | ? | $ | pwd | ls | cd <path> | send <prompt>
 ```
 
 Slash commands are not available inside Slack threads. Use an app mention or the configured prefix, for example `!codex send ...`, inside threads.
 
-After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` only while send mode is on. Send mode defaults to on for backward compatibility, and you can turn it off with `/codex send-mode off` or the `/codex s` button menu. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
+After a channel is bound to a workspace/session, normal channel messages are treated as `send <message>` only while send mode is on. Send mode defaults to on for backward compatibility, and you can turn it off with `/codex send-mode off` or the `/codex s` button menu. The default send policy is `immediate`; use `send-policy confirm` for Run now / Keep queued / Cancel buttons, or `send-policy pending` to queue all runnable input. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
 
 For the simplest session workflow, use:
 
@@ -63,7 +63,7 @@ For the simplest session workflow, use:
 /codex s
 ```
 
-This opens buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
+This opens buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Immediate`, `Confirm`, `Pending`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
 
 ## Connect Channels To Projects
 
@@ -214,7 +214,15 @@ Command explanations are English by default. To switch a channel or thread to Ko
 /codex language ko
 ```
 
-Codex execution commands are queued by default. Use pending commands to review/edit before execution:
+Codex execution commands use `send-policy immediate` by default. Switch modes per channel or thread:
+
+```text
+/codex send-policy immediate
+/codex send-policy confirm
+/codex send-policy pending
+```
+
+Use pending commands to review/edit queued work before execution:
 
 ```text
 /codex pending
