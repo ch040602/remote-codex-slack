@@ -3,7 +3,10 @@ dist/
 .env
 .codex/
 .npm-public-cache/
+config/projects.yaml
+config/skills.yaml
 data/*.json
+data/*.pid
 !data/.gitkeep
 .DS_Store
 *.log
