@@ -41,7 +41,7 @@ interface AssistActionValue {
 
 const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session", "send-mode", "send-policy"]);
 const DEFAULT_LINKED_SEND_POLICY: SendPolicy = "pending";
-const RECENT_SESSIONS_CACHE_MS = 5000;
+const RECENT_SESSIONS_CACHE_MS = 30_000;
 const MAX_SKILL_PICKER_OPTIONS = 50;
 const SLACK_OPTION_VALUE_LIMIT = 75;
 const ASSIST_ACTION_CACHE_MS = 10 * 60 * 1000;
@@ -993,7 +993,7 @@ export class SlackBridge {
   }
 
   private async handleActiveSessions(ctx: CommandContext, cmd: ParsedCommand) {
-    const active = this.listRecentSessions(50).filter((session) => session.status === "active" && session.key.startsWith("codex-cli:"));
+    const active = this.listRecentSessions(50, true).filter((session) => session.status === "active" && session.key.startsWith("codex-cli:"));
     if (active.length === 0) {
       await this.reply(ctx, this.currentLanguage(ctx) === "ko" ? "실행 중인 Codex CLI 세션이 없습니다." : "No active Codex CLI sessions found.");
       return;
@@ -1427,6 +1427,9 @@ export class SlackBridge {
   }
 
   private resolveRecentSession(ctx: CommandContext, selector: string, throwOnMissing = true): SlackThreadBinding | undefined {
+    const cached = this.resolveCachedRecentSession(ctx, selector);
+    if (cached) return cached;
+
     const recent = this.listRecentSessions(50);
     let binding: SlackThreadBinding | undefined;
 
@@ -1444,10 +1447,18 @@ export class SlackBridge {
     return binding;
   }
 
-  private listRecentSessions(limit: number): SlackThreadBinding[] {
+  private resolveCachedRecentSession(ctx: CommandContext, selector: string): SlackThreadBinding | undefined {
+    const cached = this.recentSessionsCache;
+    if (!cached || cached.expiresAt <= Date.now()) return undefined;
+    if (selector === "last") return this.store.findLatestForChannel(ctx.channelId) ?? cached.sessions[0];
+    if (/^\d+$/.test(selector)) return cached.sessions[Number(selector) - 1];
+    return cached.sessions.find((session) => session.codexThreadId === selector || session.codexThreadId?.startsWith(selector));
+  }
+
+  private listRecentSessions(limit: number, detectActiveProcesses = false): SlackThreadBinding[] {
     const now = Date.now();
     const cached = this.recentSessionsCache;
-    if (cached && cached.expiresAt > now && cached.limit >= limit) {
+    if (!detectActiveProcesses && cached && cached.expiresAt > now && cached.limit >= limit) {
       return cached.sessions.slice(0, limit);
     }
 
@@ -1456,7 +1467,7 @@ export class SlackBridge {
     const seen = new Set(local.map((session) => session.codexThreadId).filter(Boolean));
     let external: SlackThreadBinding[] = [];
     try {
-      external = listCodexCliSessions({ sessionsDir: env.codexSessionsDir, limit: scanLimit })
+      external = listCodexCliSessions({ sessionsDir: env.codexSessionsDir, limit: scanLimit, detectActiveProcesses })
         .filter((session) => !seen.has(session.id))
         .map((session) => ({
           key: `codex-cli:${session.id}`,
@@ -1479,7 +1490,9 @@ export class SlackBridge {
     const sessions = [...local, ...external]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, scanLimit);
-    this.recentSessionsCache = { expiresAt: now + RECENT_SESSIONS_CACHE_MS, limit: scanLimit, sessions };
+    if (!detectActiveProcesses) {
+      this.recentSessionsCache = { expiresAt: now + RECENT_SESSIONS_CACHE_MS, limit: scanLimit, sessions };
+    }
     return sessions.slice(0, limit);
   }
 
@@ -1772,6 +1785,11 @@ export class SlackBridge {
     try {
       if (!this.isAllowed(ctx.userId)) {
         await this.reply(ctx, "Not allowed.");
+        return;
+      }
+
+      if (value.kind === "ref") {
+        await this.reply(ctx, "This menu expired. Run `/codex bind-session`, `/codex s`, or `/codex help` again.");
         return;
       }
 
@@ -2374,7 +2392,7 @@ function parseAssistActionValue(value: unknown): AssistActionValue {
     const cached = key ? assistActionCache.get(key) : undefined;
     if (!cached || cached.expiresAt < Date.now()) {
       if (key) assistActionCache.delete(key);
-      return { kind: "command" };
+      return { kind: "ref" };
     }
     return cached.value;
   } catch {

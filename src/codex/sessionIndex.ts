@@ -28,6 +28,15 @@ export interface CodexCliSessionListOptions {
   detectActiveProcesses?: boolean;
 }
 
+const SESSION_FILE_CACHE_MS = 30_000;
+const ACTIVE_PROCESS_CACHE_MS = 15_000;
+const SUMMARY_HEAD_BYTES = 64 * 1024;
+const SUMMARY_TAIL_BYTES = 256 * 1024;
+
+let sessionFileCache: { root: string; expiresAt: number; files: Array<{ path: string; mtime: Date; mtimeMs: number }> } | undefined;
+let activeProcessCache: { expiresAt: number; ids: Set<string> } | undefined;
+const sessionListCache = new Map<string, { expiresAt: number; sessions: CodexCliSessionSummary[] }>();
+
 export function defaultCodexSessionsDir(): string {
   return path.join(os.homedir(), ".codex", "sessions");
 }
@@ -36,22 +45,37 @@ export function listCodexCliSessions(options: CodexCliSessionListOptions = {}): 
   const sessionsDir = options.sessionsDir ?? defaultCodexSessionsDir();
   const limit = options.limit ?? 50;
   if (!fs.existsSync(sessionsDir)) return [];
+  const detectActiveProcesses = options.detectActiveProcesses !== false;
+  const cacheKey = options.activeSessionIds === undefined ? `${sessionsDir}|${limit}|${detectActiveProcesses}` : undefined;
+  const cached = cacheKey ? sessionListCache.get(cacheKey) : undefined;
+  if (cached && cached.expiresAt > Date.now()) return cached.sessions.slice(0, limit);
+
   const activeSessionIds = new Set(Array.from(options.activeSessionIds ?? [], (id) => id.toLowerCase()));
-  if (options.detectActiveProcesses !== false) {
+  if (detectActiveProcesses) {
     for (const id of detectActiveCodexCliSessionIds()) activeSessionIds.add(id);
   }
 
-  return findSessionFiles(sessionsDir)
+  const candidateLimit = Math.max(limit * 2, limit + 10);
+  const sessions = findSessionFiles(sessionsDir)
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .slice(0, Math.max(limit * 4, limit))
-    .map((entry) => readCodexCliSession(entry.path, entry.mtime, activeSessionIds))
+    .slice(0, candidateLimit)
+    .map((entry) => readCodexCliSession(entry.path, entry.mtime, activeSessionIds, { compact: true }))
     .filter((session): session is CodexCliSessionSummary => Boolean(session))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .filter(uniqueSessionId())
     .slice(0, limit);
+  if (cacheKey) {
+    sessionListCache.set(cacheKey, { expiresAt: Date.now() + SESSION_FILE_CACHE_MS, sessions });
+  }
+  return sessions;
 }
 
-export function readCodexCliSession(filePath: string, fallbackMtime = new Date(), activeSessionIds: ReadonlySet<string> = new Set()): CodexCliSessionSummary | undefined {
+export function readCodexCliSession(
+  filePath: string,
+  fallbackMtime = new Date(),
+  activeSessionIds: ReadonlySet<string> = new Set(),
+  options: { compact?: boolean } = {}
+): CodexCliSessionSummary | undefined {
   let id = sessionIdFromFilename(filePath);
   let cwd = "";
   let createdAt = fallbackMtime.toISOString();
@@ -63,7 +87,7 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
   let lastTaskCompletedAt = "";
   const commands: CodexCliSessionCommand[] = [];
 
-  const content = fs.readFileSync(filePath, "utf8");
+  const content = options.compact ? readCompactSessionText(filePath) : fs.readFileSync(filePath, "utf8");
   for (const line of content.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let event: any;
@@ -149,8 +173,32 @@ export function readCodexCliSession(filePath: string, fallbackMtime = new Date()
   };
 }
 
+function readCompactSessionText(filePath: string): string {
+  const stat = fs.statSync(filePath);
+  const maxCompactBytes = SUMMARY_HEAD_BYTES + SUMMARY_TAIL_BYTES;
+  if (stat.size <= maxCompactBytes) return fs.readFileSync(filePath, "utf8");
+
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const head = Buffer.alloc(SUMMARY_HEAD_BYTES);
+    const tail = Buffer.alloc(SUMMARY_TAIL_BYTES);
+    const headBytes = fs.readSync(fd, head, 0, SUMMARY_HEAD_BYTES, 0);
+    const tailStart = Math.max(0, stat.size - SUMMARY_TAIL_BYTES);
+    const tailBytes = fs.readSync(fd, tail, 0, SUMMARY_TAIL_BYTES, tailStart);
+    return `${head.subarray(0, headBytes).toString("utf8")}\n${tail.subarray(0, tailBytes).toString("utf8")}`;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function detectActiveCodexCliSessionIds(): Set<string> {
-  return extractCodexSessionIdsFromProcessOutput(readProcessCommandLines());
+  const now = Date.now();
+  if (activeProcessCache && activeProcessCache.expiresAt > now) {
+    return new Set(activeProcessCache.ids);
+  }
+  const ids = extractCodexSessionIdsFromProcessOutput(readProcessCommandLines());
+  activeProcessCache = { expiresAt: now + ACTIVE_PROCESS_CACHE_MS, ids };
+  return new Set(ids);
 }
 
 export function extractCodexSessionIdsFromProcessOutput(output: string): Set<string> {
@@ -164,6 +212,11 @@ export function extractCodexSessionIdsFromProcessOutput(output: string): Set<str
 }
 
 function findSessionFiles(root: string): Array<{ path: string; mtime: Date; mtimeMs: number }> {
+  const now = Date.now();
+  if (sessionFileCache && sessionFileCache.root === root && sessionFileCache.expiresAt > now) {
+    return [...sessionFileCache.files];
+  }
+
   const result: Array<{ path: string; mtime: Date; mtimeMs: number }> = [];
   const stack = [root];
   while (stack.length > 0) {
@@ -184,6 +237,7 @@ function findSessionFiles(root: string): Array<{ path: string; mtime: Date; mtim
       }
     }
   }
+  sessionFileCache = { root, expiresAt: now + SESSION_FILE_CACHE_MS, files: result };
   return result;
 }
 
