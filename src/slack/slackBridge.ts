@@ -1883,7 +1883,7 @@ export class SlackBridge {
     return {
       userId: body.user?.id,
       channelId: body.channel?.id ?? body.container?.channel_id,
-      threadTs: body.message?.thread_ts ?? body.container?.thread_ts,
+      threadTs: body.message?.thread_ts ?? body.container?.thread_ts ?? body.message?.ts ?? body.container?.message_ts,
       messageTs: body.message?.ts ?? body.container?.message_ts,
       isSlash: false,
       rawText: "",
@@ -1974,6 +1974,11 @@ function codeInline(text: string): string {
   return `\`${String(text).replaceAll("`", "ʼ")}\``;
 }
 
+function slackSectionText(text: string): string {
+  const compact = String(text);
+  return compact.length <= 2900 ? compact : `${compact.slice(0, 2897)}...`;
+}
+
 function errorDetails(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) return { error: String(error) };
   const withResponse = error as Error & { response?: { status?: number; statusText?: string; data?: unknown }; data?: unknown; code?: string; status?: number; statusCode?: number };
@@ -2034,7 +2039,7 @@ function sendPolicyChoiceBlocks(language: LanguageCode, text: string): any[] {
     ? { immediate: "즉시 실행", confirm: "버튼 확인", pending: "대기 유지" }
     : { immediate: "Immediate", confirm: "Confirm", pending: "Keep pending" };
   return [
-    { type: "section", text: { type: "mrkdwn", text } },
+    { type: "section", text: { type: "mrkdwn", text: slackSectionText(text) } },
     {
       type: "actions",
       elements: [
