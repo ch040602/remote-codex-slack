@@ -1687,7 +1687,8 @@ export class SlackBridge {
       if (await this.tryRespond(ctx, { response_type: "ephemeral", replace_original: false, text })) return;
     }
     if (ctx.isSlash && ctx.respond) {
-      await ctx.respond({ response_type: "ephemeral", text });
+      if (await this.tryRespond(ctx, { response_type: "ephemeral", text })) return;
+      await this.tryPostEphemeral(ctx, { text });
       return;
     }
     if (ctx.threadTs) {
@@ -1702,7 +1703,10 @@ export class SlackBridge {
       if (await this.tryRespond(ctx, { response_type: "ephemeral", replace_original: false, text: message.text, blocks: message.blocks })) return;
     }
     if (ctx.isSlash && ctx.respond) {
-      await ctx.respond({ response_type: "ephemeral", text: message.text, blocks: message.blocks });
+      if (await this.tryRespond(ctx, { response_type: "ephemeral", text: message.text, blocks: message.blocks })) return;
+      if (await this.tryRespond(ctx, { response_type: "ephemeral", text: message.text })) return;
+      if (message.blocks && await this.tryPostEphemeral(ctx, { text: message.text, blocks: message.blocks })) return;
+      await this.tryPostEphemeral(ctx, { text: message.text });
       return;
     }
     if (ctx.threadTs) {
@@ -1720,6 +1724,25 @@ export class SlackBridge {
         return true;
       } catch (error) {
         logger.warn("Slack action respond failed; falling back to chat.postMessage", { attempt, ...errorDetails(error) });
+        if (!isTransientHttpError(error) || attempt === 2) return false;
+        await sleep(250 * attempt);
+      }
+    }
+    return false;
+  }
+
+  private async tryPostEphemeral(ctx: CommandContext, message: { text: string; blocks?: any[] }): Promise<boolean> {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await ctx.client.chat.postEphemeral({
+          channel: ctx.channelId,
+          user: ctx.userId,
+          text: message.text,
+          blocks: message.blocks
+        });
+        return true;
+      } catch (error) {
+        logger.warn("Slack chat.postEphemeral failed", { attempt, channel: ctx.channelId, ...errorDetails(error) });
         if (!isTransientHttpError(error) || attempt === 2) return false;
         await sleep(250 * attempt);
       }
@@ -1975,7 +1998,7 @@ function codeInline(text: string): string {
 }
 
 function slackSectionText(text: string): string {
-  const compact = String(text);
+  const compact = String(text).trim() || "(empty)";
   return compact.length <= 2900 ? compact : `${compact.slice(0, 2897)}...`;
 }
 
@@ -2362,14 +2385,18 @@ function bindSessionPickerBlocks(sessions: SlackThreadBinding[], language: Langu
       value: encodeAssistActionValue({ kind: "bind-session", sessionId: session.codexThreadId })
     }));
 
+  const section = {
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: slackSectionText(text),
+      verbatim: true
+    }
+  };
+  if (options.length === 0) return [section];
+
   return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text
-      }
-    },
+    section,
     {
       type: "actions",
       elements: [
@@ -2458,7 +2485,7 @@ function replaceSkillToken(rawText: string, token: string, replacement: string):
 }
 
 function optionLabel(value: string): string {
-  const compact = value.replace(/\s+/g, " ").trim();
+  const compact = value.replace(/\s+/g, " ").trim() || "(empty)";
   return compact.length <= 75 ? compact : `${compact.slice(0, 72)}...`;
 }
 
@@ -2615,6 +2642,11 @@ function renderSendPolicyStatus(policy: SendPolicy, language: LanguageCode): str
     "Change: `send-policy immediate` / `send-policy confirm` / `send-policy pending`"
   ].join("\n");
 }
+
+export const slackBridgeTestInternals = {
+  bindSessionPickerBlocks,
+  slackSectionText
+};
 
 function helpText(prefix: string, language: LanguageCode): string {
   if (language === "ko") {
