@@ -108,6 +108,7 @@ app_mentions:read
 chat:write
 commands
 channels:history
+channels:join
 channels:read
 im:history
 im:read
@@ -119,7 +120,6 @@ Add these scopes only if you want `npm run channels:create` to create and invite
 
 ```text
 channels:manage
-channels:join
 groups:write
 users:read
 ```
@@ -154,6 +154,8 @@ This opens a button menu for the current repo/channel:
 - `Status` and `Recent`: inspect the current or recent sessions.
 
 On desktop, type `/codex s` and click a button. On mobile, type `/codex s`, send it, then tap the button or picker in the bot response.
+
+When a slash command is used in a public channel where the bot has not been added yet, the bridge tries to join that channel before posting the session thread. This lets a newly created public Slack channel become the Codex channel itself through `/codex s`, `/codex cd <path>`, `/codex bind-session`, or `/codex new ...`. For private channels, Slack requires a member to invite the app first.
 
 ## Environment
 

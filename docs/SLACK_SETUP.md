@@ -24,6 +24,7 @@ app_mentions:read
 chat:write
 commands
 channels:history
+channels:join
 channels:read
 im:history
 im:read
@@ -35,7 +36,6 @@ Optional scopes for `npm run channels:create`:
 
 ```text
 channels:manage
-channels:join
 groups:write
 users:read
 ```
@@ -64,6 +64,8 @@ For the simplest session workflow, use:
 ```
 
 This opens buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Immediate`, `Confirm`, `Pending`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
+
+In a newly created public Slack channel, you can run `/codex s`, `/codex cd <path>`, `/codex bind-session`, or `/codex new ...` directly in that channel. If the bot is not already a member, the bridge uses `channels:join` to join before posting the session thread, so the current channel becomes the linked Codex channel. For private channels, invite the app to the channel first.
 
 ## Connect Channels To Projects
 

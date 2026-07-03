@@ -375,7 +375,7 @@ export class SlackBridge {
       updatedBy: ctx.userId
     });
 
-    await this.postThread(ctx.client, channelId, undefined, [
+    await this.postThread(ctx, channelId, undefined, [
       `Channel created for Codex navigation: ${codeInline(`#${channelName}`)}`,
       `cwd: ${codeInline(root)}`,
       "Use `/codex ls`, `/codex cd <folder>`, `/codex pwd`, then `/codex new ...` to queue work.",
@@ -1521,7 +1521,7 @@ export class SlackBridge {
         session.lastFinalAnswer ? `last response: ${preview(session.lastFinalAnswer, 500)}` : undefined,
         `Send policy was set to ${codeInline(DEFAULT_LINKED_SEND_POLICY)} for safety. Change it?`
       ].filter(Boolean).join("\n");
-    const posted = await ctx.client.chat.postMessage({
+    const posted = await this.chatPostMessage(ctx.client, {
       channel: channelId,
       text: linkedText,
       blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), linkedText)
@@ -1648,7 +1648,7 @@ export class SlackBridge {
 
   private async ensureSlackThread(ctx: CommandContext, rootText: string): Promise<{ channelId: string; threadTs: string }> {
     if (ctx.threadTs) return { channelId: ctx.channelId, threadTs: ctx.threadTs };
-    const posted = await ctx.client.chat.postMessage({
+    const posted = await this.chatPostMessage(ctx.client, {
       channel: ctx.channelId,
       text: rootText
     });
@@ -1673,9 +1673,9 @@ export class SlackBridge {
       return;
     }
     if (ctx.threadTs) {
-      await this.postThread(ctx.client, ctx.channelId, ctx.threadTs, text);
+      await this.postThread(ctx, ctx.channelId, ctx.threadTs, text);
     } else {
-      await this.postThread(ctx.client, ctx.channelId, undefined, text);
+      await this.postThread(ctx, ctx.channelId, undefined, text);
     }
   }
 
@@ -1688,9 +1688,9 @@ export class SlackBridge {
       return;
     }
     if (ctx.threadTs) {
-      await ctx.client.chat.postMessage({ channel: ctx.channelId, thread_ts: ctx.threadTs, text: message.text, blocks: message.blocks });
+      await this.chatPostMessage(ctx.client, { channel: ctx.channelId, thread_ts: ctx.threadTs, text: message.text, blocks: message.blocks });
     } else {
-      await ctx.client.chat.postMessage({ channel: ctx.channelId, text: message.text, blocks: message.blocks });
+      await this.chatPostMessage(ctx.client, { channel: ctx.channelId, text: message.text, blocks: message.blocks });
     }
   }
 
@@ -1705,15 +1705,38 @@ export class SlackBridge {
     }
   }
 
-  private async postThread(client: WebClient, channel: string, threadTs: string | undefined, text: string) {
+  private async postThread(clientOrCtx: WebClient | CommandContext, channel: string, threadTs: string | undefined, text: string) {
+    const client = "client" in clientOrCtx ? clientOrCtx.client : clientOrCtx;
     const chunks = splitForSlack(text, env.slackMaxMessageChars);
     for (const chunk of chunks) {
-      await client.chat.postMessage({ channel, thread_ts: threadTs, text: chunk });
+      await this.chatPostMessage(client, { channel, thread_ts: threadTs, text: chunk });
     }
   }
 
   private async postThreadWithBlocks(client: WebClient, channel: string, threadTs: string | undefined, message: { text: string; blocks?: any[] }) {
-    await client.chat.postMessage({ channel, thread_ts: threadTs, text: message.text, blocks: message.blocks });
+    await this.chatPostMessage(client, { channel, thread_ts: threadTs, text: message.text, blocks: message.blocks });
+  }
+
+  private async chatPostMessage(client: WebClient, params: Parameters<WebClient["chat"]["postMessage"]>[0]) {
+    try {
+      return await client.chat.postMessage(params);
+    } catch (error) {
+      if (!isSlackApiError(error, "not_in_channel") || typeof params.channel !== "string") throw error;
+      await this.joinChannelForPost(client, params.channel);
+      return await client.chat.postMessage(params);
+    }
+  }
+
+  private async joinChannelForPost(client: WebClient, channelId: string) {
+    if (!channelId.startsWith("C")) {
+      throw new Error(`The bot is not in ${channelId}. Invite the app to this private channel, then run the command again.`);
+    }
+    try {
+      await client.conversations.join({ channel: channelId });
+      logger.info("joined Slack channel before posting", { channelId });
+    } catch (error) {
+      throw new Error(`Could not join ${channelId}. Invite the app to the channel, then run the command again. ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private commandAssistMessage(query: string, language: LanguageCode, suggestions = commandSuggestions(query, 10)): { text: string; blocks: any[] } {
@@ -1922,6 +1945,11 @@ function errorDetails(error: unknown): Record<string, unknown> {
     responseData: withResponse.response?.data ?? withResponse.data,
     stack: error.stack
   };
+}
+
+function isSlackApiError(error: unknown, code: string): boolean {
+  const maybe = error as { data?: { error?: unknown }; response?: { data?: { error?: unknown } } } | undefined;
+  return maybe?.data?.error === code || maybe?.response?.data?.error === code;
 }
 
 function commandPickerBlocks(language: LanguageCode, query: string, suggestions = commandSuggestions(query, 10)): any[] {
