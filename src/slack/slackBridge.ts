@@ -31,7 +31,7 @@ interface CommandContext {
 }
 
 interface AssistActionValue {
-  kind: "command" | "skill" | "bind-session" | "session-action" | "pending-action" | "rerun-action";
+  kind: "command" | "skill" | "bind-session" | "session-action" | "pending-action" | "rerun-action" | "ref";
   command?: string;
   rawText?: string;
   sessionId?: string;
@@ -43,6 +43,9 @@ const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", 
 const DEFAULT_LINKED_SEND_POLICY: SendPolicy = "pending";
 const RECENT_SESSIONS_CACHE_MS = 5000;
 const MAX_SKILL_PICKER_OPTIONS = 50;
+const SLACK_OPTION_VALUE_LIMIT = 75;
+const ASSIST_ACTION_CACHE_MS = 10 * 60 * 1000;
+const assistActionCache = new Map<string, { expiresAt: number; value: AssistActionValue }>();
 
 interface CommandLookupResult {
   query: string;
@@ -1960,7 +1963,7 @@ function commandPickerBlocks(language: LanguageCode, query: string, suggestions 
   const pickerEntries = suggestions.length > 0 ? suggestions.map(({ entry }) => entry) : COMMAND_HELP.slice(0, 10);
   const options = pickerEntries.map((entry) => ({
     text: { type: "plain_text", text: optionLabel(`${entry.name} - ${language === "ko" ? entry.ko : entry.en}`) },
-    value: JSON.stringify({ kind: "command", command: entry.name } satisfies AssistActionValue)
+    value: encodeAssistActionValue({ kind: "command", command: entry.name })
   }));
 
   return [
@@ -2001,7 +2004,7 @@ function skillPickerBlocks(skills: SkillDef[], filter: string, rawText: string, 
   }
   const options = skills.map((skill) => ({
     text: { type: "plain_text", text: optionLabel(`$${skill.name}${skill.description ? ` - ${skill.description}` : ""}`) },
-    value: JSON.stringify({ kind: "skill", command: skill.name, rawText, token } satisfies AssistActionValue)
+    value: encodeAssistActionValue({ kind: "skill", command: skill.name, rawText, token })
   }));
   const title = filter ? `Skill matches for \`$${filter}\`` : "Configured skills";
   const previewText = skills
@@ -2047,7 +2050,7 @@ function pendingActionButton(label: string, pendingId: string, command: string, 
     type: "button",
     action_id: "codex_pending_action",
     text: { type: "plain_text", text: label },
-    value: JSON.stringify({ kind: "pending-action", pendingId, command } satisfies AssistActionValue),
+    value: encodeAssistActionValue({ kind: "pending-action", pendingId, command }),
     ...(style ? { style } : {})
   };
 }
@@ -2084,7 +2087,7 @@ function rerunPickerBlocks(sessions: SlackThreadBinding[], language: LanguageCod
     .map((session, index) => ({
       text: { type: "plain_text", text: optionLabel(`${index + 1}. ${workspaceFolderName(session.cwd)} ${session.status}`) },
       description: { type: "plain_text", text: optionLabel(session.lastPrompt ?? session.cwd) },
-      value: JSON.stringify({ kind: "rerun-action", command: "select", sessionId: session.codexThreadId } satisfies AssistActionValue)
+      value: encodeAssistActionValue({ kind: "rerun-action", command: "select", sessionId: session.codexThreadId })
     }));
 
   return [
@@ -2127,7 +2130,7 @@ function rerunActionButton(label: string, sessionId: string, command: string, st
     type: "button",
     action_id: "codex_rerun_action",
     text: { type: "plain_text", text: label },
-    value: JSON.stringify({ kind: "rerun-action", command, sessionId } satisfies AssistActionValue),
+    value: encodeAssistActionValue({ kind: "rerun-action", command, sessionId }),
     ...(style ? { style } : {})
   };
 }
@@ -2260,7 +2263,7 @@ function sessionActionButton(label: string, command: string, style?: "primary" |
     type: "button",
     action_id: "codex_session_action",
     text: { type: "plain_text", text: label },
-    value: JSON.stringify({ kind: "session-action", command } satisfies AssistActionValue),
+    value: encodeAssistActionValue({ kind: "session-action", command }),
     ...(style ? { style } : {})
   };
 }
@@ -2303,7 +2306,7 @@ function bindSessionPickerBlocks(sessions: SlackThreadBinding[], language: Langu
     .map((session, index) => ({
       text: { type: "plain_text", text: optionLabel(`${index + 1}. ${workspaceFolderName(session.cwd)} ${session.status} ${session.codexThreadId}`) },
       description: { type: "plain_text", text: optionLabel(session.lastPrompt ? `prompt: ${preview(session.lastPrompt, 80)}` : session.cwd) },
-      value: JSON.stringify({ kind: "bind-session", sessionId: session.codexThreadId } satisfies AssistActionValue)
+      value: encodeAssistActionValue({ kind: "bind-session", sessionId: session.codexThreadId })
     }));
 
   return [
@@ -2365,9 +2368,33 @@ function parseAssistActionValue(value: unknown): AssistActionValue {
   if (typeof value !== "string") return { kind: "command" };
   try {
     const parsed = JSON.parse(value) as AssistActionValue;
-    return parsed && typeof parsed.kind === "string" ? parsed : { kind: "command" };
+    if (!parsed || typeof parsed.kind !== "string") return { kind: "command" };
+    if (parsed.kind !== "ref") return parsed;
+    const key = parsed.command;
+    const cached = key ? assistActionCache.get(key) : undefined;
+    if (!cached || cached.expiresAt < Date.now()) {
+      if (key) assistActionCache.delete(key);
+      return { kind: "command" };
+    }
+    return cached.value;
   } catch {
     return { kind: "command" };
+  }
+}
+
+function encodeAssistActionValue(value: AssistActionValue): string {
+  const direct = JSON.stringify(value);
+  if (direct.length <= SLACK_OPTION_VALUE_LIMIT) return direct;
+  pruneAssistActionCache();
+  const key = `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  assistActionCache.set(key, { expiresAt: Date.now() + ASSIST_ACTION_CACHE_MS, value });
+  return JSON.stringify({ kind: "ref", command: key } satisfies AssistActionValue);
+}
+
+function pruneAssistActionCache() {
+  const now = Date.now();
+  for (const [key, cached] of assistActionCache) {
+    if (cached.expiresAt < now) assistActionCache.delete(key);
   }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "codex-slack-workspace-bridge",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Slack bridge for controlling local Codex workspaces, sessions, reruns, final answers, and $skill invocation.",
   "type": "module",
   "private": true,
