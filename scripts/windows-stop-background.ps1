@@ -21,6 +21,21 @@ function Stop-ProcessTree([int]$ProcessId) {
 }
 
 Stop-ProcessTree -ProcessId $rootPid
+
+$repoText = [Regex]::Escape([string]$repo)
+$leftovers = Get-CimInstance Win32_Process | Where-Object {
+  $_.ProcessId -ne $PID -and
+  $_.CommandLine -and
+  $_.CommandLine -match $repoText -and
+  (
+    $_.CommandLine -match "src[/\\]index\.ts" -or
+    $_.CommandLine -match "tsx[/\\]dist[/\\]cli\.mjs" -or
+    $_.CommandLine -match "@esbuild[/\\]win32"
+  )
+}
+foreach ($proc in $leftovers) {
+  Stop-ProcessTree -ProcessId ([int]$proc.ProcessId)
+}
+
 Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
 Write-Host "Bridge stopped."
-
