@@ -1607,6 +1607,8 @@ export class SlackBridge {
 
     const text = [
       `Bound this ${ctx.threadTs ? "thread" : "channel"} to Codex session ${codeInline(session.codexThreadId)}.`,
+      `Slack channel: ${codeInline(threadContext.channelId)}`,
+      `Slack thread: ${codeInline(threadContext.threadTs)}`,
       `cwd: ${codeInline(session.cwd)}`,
       `send policy: ${codeInline(DEFAULT_LINKED_SEND_POLICY)}`,
       this.sendModeForContext(ctx)
@@ -1712,13 +1714,17 @@ export class SlackBridge {
 
   private async tryRespond(ctx: CommandContext, message: any): Promise<boolean> {
     if (!ctx.respond) return false;
-    try {
-      await ctx.respond(message);
-      return true;
-    } catch (error) {
-      logger.warn("Slack action respond failed; falling back to chat.postMessage", errorDetails(error));
-      return false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await ctx.respond(message);
+        return true;
+      } catch (error) {
+        logger.warn("Slack action respond failed; falling back to chat.postMessage", { attempt, ...errorDetails(error) });
+        if (!isTransientHttpError(error) || attempt === 2) return false;
+        await sleep(250 * attempt);
+      }
     }
+    return false;
   }
 
   private async postThread(clientOrCtx: WebClient | CommandContext, channel: string, threadTs: string | undefined, text: string) {
@@ -1734,24 +1740,38 @@ export class SlackBridge {
   }
 
   private async chatPostMessage(client: WebClient, params: Parameters<WebClient["chat"]["postMessage"]>[0]) {
-    try {
-      return await client.chat.postMessage(params);
-    } catch (error) {
-      if (!isSlackApiError(error, "not_in_channel") || typeof params.channel !== "string") throw error;
-      await this.joinChannelForPost(client, params.channel);
-      return await client.chat.postMessage(params);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await client.chat.postMessage(params);
+      } catch (error) {
+        if (isSlackApiError(error, "not_in_channel") && typeof params.channel === "string") {
+          await this.joinChannelForPost(client, params.channel);
+          continue;
+        }
+        if (!isTransientHttpError(error) || attempt === 3) throw error;
+        logger.warn("Slack chat.postMessage transient failure; retrying", { attempt, channel: params.channel, ...errorDetails(error) });
+        await sleep(300 * attempt);
+      }
     }
+    throw new Error("Slack chat.postMessage failed after retries");
   }
 
   private async joinChannelForPost(client: WebClient, channelId: string) {
     if (!channelId.startsWith("C")) {
       throw new Error(`The bot is not in ${channelId}. Invite the app to this private channel, then run the command again.`);
     }
-    try {
-      await client.conversations.join({ channel: channelId });
-      logger.info("joined Slack channel before posting", { channelId });
-    } catch (error) {
-      throw new Error(`Could not join ${channelId}. Invite the app to the channel, then run the command again. ${error instanceof Error ? error.message : String(error)}`);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await client.conversations.join({ channel: channelId });
+        logger.info("joined Slack channel before posting", { channelId });
+        return;
+      } catch (error) {
+        if (!isTransientHttpError(error) || attempt === 3) {
+          throw new Error(`Could not join ${channelId}. Invite the app to the channel, then run the command again. ${error instanceof Error ? error.message : String(error)}`);
+        }
+        logger.warn("Slack conversations.join transient failure; retrying", { attempt, channelId, ...errorDetails(error) });
+        await sleep(300 * attempt);
+      }
     }
   }
 
@@ -1956,12 +1976,12 @@ function codeInline(text: string): string {
 
 function errorDetails(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) return { error: String(error) };
-  const withResponse = error as Error & { response?: { status?: number; statusText?: string; data?: unknown }; data?: unknown; code?: string };
+  const withResponse = error as Error & { response?: { status?: number; statusText?: string; data?: unknown }; data?: unknown; code?: string; status?: number; statusCode?: number };
   return {
     error: error.message,
     name: error.name,
     code: withResponse.code,
-    status: withResponse.response?.status,
+    status: withResponse.status ?? withResponse.statusCode ?? withResponse.response?.status,
     statusText: withResponse.response?.statusText,
     responseData: withResponse.response?.data ?? withResponse.data,
     stack: error.stack
@@ -1971,6 +1991,16 @@ function errorDetails(error: unknown): Record<string, unknown> {
 function isSlackApiError(error: unknown, code: string): boolean {
   const maybe = error as { data?: { error?: unknown }; response?: { data?: { error?: unknown } } } | undefined;
   return maybe?.data?.error === code || maybe?.response?.data?.error === code;
+}
+
+function isTransientHttpError(error: unknown): boolean {
+  const maybe = error as { status?: unknown; statusCode?: unknown; response?: { status?: unknown } } | undefined;
+  const status = Number(maybe?.status ?? maybe?.statusCode ?? maybe?.response?.status);
+  return Number.isFinite(status) && status >= 500 && status < 600;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function commandPickerBlocks(language: LanguageCode, query: string, suggestions = commandSuggestions(query, 10)): any[] {
