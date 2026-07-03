@@ -142,7 +142,7 @@ export class SlackBridge {
       await this.handleAssistAction(body, client, respond);
     });
 
-    this.app.action("codex_session_action", async ({ ack, body, client, respond }: any) => {
+    this.app.action(/^codex_session_action(?:_|$)/, async ({ ack, body, client, respond }: any) => {
       await ack();
       await this.handleAssistAction(body, client, respond);
     });
@@ -2337,7 +2337,7 @@ function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode
 function sessionActionButton(label: string, command: string, style?: "primary" | "danger"): any {
   return {
     type: "button",
-    action_id: "codex_session_action",
+    action_id: `codex_session_action_${slackActionIdSuffix(command)}`,
     text: { type: "plain_text", text: label },
     value: encodeAssistActionValue({ kind: "session-action", command }),
     ...(style ? { style } : {})
@@ -2487,6 +2487,10 @@ function replaceSkillToken(rawText: string, token: string, replacement: string):
 function optionLabel(value: string): string {
   const compact = value.replace(/\s+/g, " ").trim() || "(empty)";
   return compact.length <= 75 ? compact : `${compact.slice(0, 72)}...`;
+}
+
+function slackActionIdSuffix(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "action";
 }
 
 function normalizeSlackChannelName(name: string): string {
@@ -2645,6 +2649,7 @@ function renderSendPolicyStatus(policy: SendPolicy, language: LanguageCode): str
 
 export const slackBridgeTestInternals = {
   bindSessionPickerBlocks,
+  sendPolicyChoiceBlocks,
   slackSectionText
 };
 

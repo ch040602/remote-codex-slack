@@ -44,4 +44,12 @@ describe("Slack bridge block generation", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0].text.text).toBe("(empty)");
   });
+
+  it("uses unique action ids inside send-policy actions blocks", () => {
+    const blocks = slackBridgeTestInternals.sendPolicyChoiceBlocks("en", "Change send policy?");
+    const actions = blocks.find((block: any) => block.type === "actions");
+    const ids = actions.elements.map((element: any) => element.action_id);
+
+    expect(new Set(ids).size).toBe(ids.length);
+  });
 });
