@@ -25,6 +25,7 @@ interface CommandContext {
   isSlash: boolean;
   rawText: string;
   bypassCommandLookup?: boolean;
+  preferRespond?: boolean;
   client: WebClient;
   respond?: (message: any) => Promise<any>;
 }
@@ -284,7 +285,7 @@ export class SlackBridge {
           await this.reply(ctx, "Unknown command. Use `help`.");
       }
     } catch (error) {
-      logger.error("command failed", { error: String(error) });
+      logger.error("command failed", errorDetails(error));
       await this.reply(ctx, `Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -1664,6 +1665,9 @@ export class SlackBridge {
   }
 
   private async reply(ctx: CommandContext, text: string) {
+    if (ctx.preferRespond && ctx.respond) {
+      if (await this.tryRespond(ctx, { response_type: "ephemeral", replace_original: false, text })) return;
+    }
     if (ctx.isSlash && ctx.respond) {
       await ctx.respond({ response_type: "ephemeral", text });
       return;
@@ -1676,6 +1680,9 @@ export class SlackBridge {
   }
 
   private async replyWithBlocks(ctx: CommandContext, message: { text: string; blocks?: any[] }) {
+    if (ctx.preferRespond && ctx.respond) {
+      if (await this.tryRespond(ctx, { response_type: "ephemeral", replace_original: false, text: message.text, blocks: message.blocks })) return;
+    }
     if (ctx.isSlash && ctx.respond) {
       await ctx.respond({ response_type: "ephemeral", text: message.text, blocks: message.blocks });
       return;
@@ -1684,6 +1691,17 @@ export class SlackBridge {
       await ctx.client.chat.postMessage({ channel: ctx.channelId, thread_ts: ctx.threadTs, text: message.text, blocks: message.blocks });
     } else {
       await ctx.client.chat.postMessage({ channel: ctx.channelId, text: message.text, blocks: message.blocks });
+    }
+  }
+
+  private async tryRespond(ctx: CommandContext, message: any): Promise<boolean> {
+    if (!ctx.respond) return false;
+    try {
+      await ctx.respond(message);
+      return true;
+    } catch (error) {
+      logger.warn("Slack action respond failed; falling back to chat.postMessage", errorDetails(error));
+      return false;
     }
   }
 
@@ -1774,7 +1792,7 @@ export class SlackBridge {
         return;
       }
     } catch (error) {
-      logger.error("assist action failed", { error: String(error), kind: value.kind });
+      logger.error("assist action failed", { kind: value.kind, ...errorDetails(error) });
       await this.reply(ctx, `Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -1805,6 +1823,7 @@ export class SlackBridge {
       messageTs: body.message?.ts ?? body.container?.message_ts,
       isSlash: false,
       rawText: "",
+      preferRespond: true,
       client,
       respond
     };
@@ -1889,6 +1908,20 @@ export class SlackBridge {
 
 function codeInline(text: string): string {
   return `\`${String(text).replaceAll("`", "ʼ")}\``;
+}
+
+function errorDetails(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { error: String(error) };
+  const withResponse = error as Error & { response?: { status?: number; statusText?: string; data?: unknown }; data?: unknown; code?: string };
+  return {
+    error: error.message,
+    name: error.name,
+    code: withResponse.code,
+    status: withResponse.response?.status,
+    statusText: withResponse.response?.statusText,
+    responseData: withResponse.response?.data ?? withResponse.data,
+    stack: error.stack
+  };
 }
 
 function commandPickerBlocks(language: LanguageCode, query: string, suggestions = commandSuggestions(query, 10)): any[] {
