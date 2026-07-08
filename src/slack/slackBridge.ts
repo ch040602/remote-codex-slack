@@ -2800,7 +2800,7 @@ function externalCliSessionSyncUpdate(binding: SlackThreadBinding, session: Code
     if (binding.status !== "active") patch.status = "active";
     if (binding.activeTurnId !== externalTurnId) patch.activeTurnId = externalTurnId;
     if (Object.keys(patch).length > 0) patch.updatedAt = session.updatedAt;
-    if (!hasNewFinalAnswer) {
+    if (!hasNewFinalAnswer || session.turnActive) {
       return Object.keys(patch).length > 0 ? { patch } : undefined;
     }
     return {

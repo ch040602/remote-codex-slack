@@ -96,6 +96,48 @@ describe("Codex CLI session index", () => {
     ].join("\n"));
 
     expect(readCodexCliSession(file)?.status).toBe("active");
+    expect(readCodexCliSession(file)?.turnActive).toBe(true);
+  });
+
+  it("marks sessions turn-idle after task_complete even when a CLI process remains open", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-session-index-process-active-turn-idle-"));
+    const file = path.join(dir, "rollout-2026-07-02T12-00-00-019f20cf-7b8a-7c52-b037-d90afad6fd44.jsonl");
+    fs.writeFileSync(file, [
+      JSON.stringify({
+        timestamp: "2026-07-02T03:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          session_id: "019f20cf-7b8a-7c52-b037-d90afad6fd44",
+          timestamp: "2026-07-02T03:00:00.000Z",
+          cwd: "C:/repo"
+        }
+      }),
+      JSON.stringify({
+        timestamp: "2026-07-02T03:00:01.000Z",
+        type: "event_msg",
+        payload: { type: "task_started" }
+      }),
+      JSON.stringify({
+        timestamp: "2026-07-02T03:00:02.000Z",
+        type: "event_msg",
+        payload: { type: "agent_message", message: "final answer" }
+      }),
+      JSON.stringify({
+        timestamp: "2026-07-02T03:00:03.000Z",
+        type: "event_msg",
+        payload: { type: "task_complete" }
+      })
+    ].join("\n"));
+
+    const sessions = listCodexCliSessions({
+      sessionsDir: dir,
+      limit: 1,
+      activeSessionIds: ["019f20cf-7b8a-7c52-b037-d90afad6fd44"],
+      detectActiveProcesses: false
+    });
+    expect(sessions[0].status).toBe("active");
+    expect(sessions[0].turnActive).toBe(false);
+    expect(sessions[0].lastFinalAnswer).toBe("final answer");
   });
 
   it("marks sessions active when an open Codex CLI process references the session", () => {

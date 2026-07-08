@@ -7,6 +7,7 @@ export interface CodexCliSessionSummary {
   id: string;
   cwd: string;
   status: "idle" | "active";
+  turnActive: boolean;
   createdAt: string;
   updatedAt: string;
   path: string;
@@ -165,6 +166,7 @@ export function readCodexCliSession(
     id,
     cwd,
     status: hasOpenTurn || hasOpenCliProcess ? "active" : "idle",
+    turnActive: hasOpenTurn,
     createdAt,
     updatedAt: finalUpdatedAt,
     path: filePath,

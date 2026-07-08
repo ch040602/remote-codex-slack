@@ -166,6 +166,7 @@ describe("Slack bridge block generation", () => {
       id: "thread-1",
       cwd: "C:/repo",
       status: "idle",
+      turnActive: false,
       createdAt: "2026-07-07T00:00:00.000Z",
       updatedAt: "2026-07-07T00:01:00.000Z",
       path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
@@ -195,7 +196,7 @@ describe("Slack bridge block generation", () => {
     });
   });
 
-  it("posts new external CLI answers even while the CLI process remains active", () => {
+  it("posts final external CLI answers when the CLI process remains active after turn completion", () => {
     const binding: SlackThreadBinding = {
       key: "C1:1.0",
       channelId: "C1",
@@ -214,6 +215,7 @@ describe("Slack bridge block generation", () => {
       id: "thread-1",
       cwd: "C:/repo",
       status: "active",
+      turnActive: false,
       createdAt: "2026-07-07T00:00:00.000Z",
       updatedAt: "2026-07-07T00:01:00.000Z",
       path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
@@ -239,6 +241,43 @@ describe("Slack bridge block generation", () => {
     });
   });
 
+  it("does not post external CLI assistant messages before the turn completes", () => {
+    const binding: SlackThreadBinding = {
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      codexThreadId: "thread-1",
+      activeTurnId: "external-cli:thread-1",
+      status: "active",
+      lastFinalAnswer: "old answer",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:00:00.000Z",
+      createdBy: "U1"
+    };
+
+    const update = slackBridgeTestInternals.externalCliSessionSyncUpdate(binding, {
+      id: "thread-1",
+      cwd: "C:/repo",
+      status: "active",
+      turnActive: true,
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:01:00.000Z",
+      path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
+      lastPrompt: "run from cli",
+      lastFinalAnswer: "partial in-progress answer",
+      commands: [{ timestamp: "2026-07-07T00:00:30.000Z", prompt: "run from cli" }]
+    });
+
+    expect(update?.patch).toMatchObject({
+      lastPrompt: "run from cli",
+      lastFinalAnswer: "partial in-progress answer",
+      sessionCommands: [{ timestamp: "2026-07-07T00:00:30.000Z", prompt: "run from cli" }],
+      updatedAt: "2026-07-07T00:01:00.000Z"
+    });
+    expect(update?.completion).toBeUndefined();
+  });
+
   it("does not duplicate Slack-managed CLI completion messages", () => {
     const binding: SlackThreadBinding = {
       key: "C1:1.0",
@@ -258,6 +297,7 @@ describe("Slack bridge block generation", () => {
       id: "thread-1",
       cwd: "C:/repo",
       status: "idle",
+      turnActive: false,
       createdAt: "2026-07-07T00:00:00.000Z",
       updatedAt: "2026-07-07T00:01:00.000Z",
       path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
