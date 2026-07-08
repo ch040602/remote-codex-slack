@@ -38,6 +38,7 @@ const KNOWN = new Set<CommandName>([
 ]);
 
 const BOOLEAN_OPTIONS = new Set(["force"]);
+const PLAIN_WORKSPACE_COMMANDS = new Set(["cd", "use", "pwd", "ls", "projects"]);
 
 export function stripBotMention(text: string): string {
   return text.replace(/^<@[A-Z0-9]+>\s*/, "").trim();
@@ -58,7 +59,17 @@ export function normalizeSlackMessageText(text: string, commandPrefix: string, i
 
   const trimmed = text.trim();
   if (!trimmed || trimmed.startsWith("/")) return undefined;
+  if (isPlainWorkspaceCommandText(trimmed, commandPrefix, isDirectMessage)) return trimmed;
   return isDirectMessage ? trimmed : `send ${trimmed}`;
+}
+
+export function isPlainWorkspaceCommandText(text: string, commandPrefix: string, isDirectMessage: boolean): boolean {
+  if (isDirectMessage) return false;
+  if (stripPrefix(text, commandPrefix) !== undefined) return false;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.startsWith("/")) return false;
+  const [head] = tokenize(trimmed);
+  return PLAIN_WORKSPACE_COMMANDS.has(head?.toLowerCase() ?? "");
 }
 
 export function isPlainSlackChannelMessage(text: string, commandPrefix: string, isDirectMessage: boolean): boolean {

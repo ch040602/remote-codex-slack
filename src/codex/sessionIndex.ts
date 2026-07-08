@@ -26,6 +26,7 @@ export interface CodexCliSessionListOptions {
   limit?: number;
   activeSessionIds?: Iterable<string>;
   detectActiveProcesses?: boolean;
+  useCache?: boolean;
 }
 
 const SESSION_FILE_CACHE_MS = 30_000;
@@ -46,7 +47,8 @@ export function listCodexCliSessions(options: CodexCliSessionListOptions = {}): 
   const limit = options.limit ?? 50;
   if (!fs.existsSync(sessionsDir)) return [];
   const detectActiveProcesses = options.detectActiveProcesses !== false;
-  const cacheKey = options.activeSessionIds === undefined ? `${sessionsDir}|${limit}|${detectActiveProcesses}` : undefined;
+  const useCache = options.useCache !== false;
+  const cacheKey = useCache && options.activeSessionIds === undefined ? `${sessionsDir}|${limit}|${detectActiveProcesses}` : undefined;
   const cached = cacheKey ? sessionListCache.get(cacheKey) : undefined;
   if (cached && cached.expiresAt > Date.now()) return cached.sessions.slice(0, limit);
 

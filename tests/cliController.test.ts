@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexCliArgs, normalizeSandbox } from "../src/codex/cliController.js";
+import { buildCodexCliArgs, extractFinalAnswerFromCodexJsonEvent, normalizeSandbox } from "../src/codex/cliController.js";
 import type { BridgeConfig } from "../src/config.js";
 
 function cfg(): BridgeConfig {
@@ -51,5 +51,40 @@ describe("Codex CLI controller helpers", () => {
     expect(normalizeSandbox("readOnly")).toBe("read-only");
     expect(normalizeSandbox("dangerFullAccess")).toBe("danger-full-access");
   });
-});
 
+  it("extracts final answers from Codex response_item assistant messages", () => {
+    expect(extractFinalAnswerFromCodexJsonEvent({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [
+          { type: "output_text", text: "actual final answer" }
+        ]
+      }
+    })).toBe("actual final answer");
+  });
+
+  it("extracts final answers from Codex event_msg agent messages", () => {
+    expect(extractFinalAnswerFromCodexJsonEvent({
+      type: "event_msg",
+      payload: {
+        type: "agent_message",
+        message: "actual streamed answer"
+      }
+    })).toBe("actual streamed answer");
+  });
+
+  it("does not treat non-assistant response items as final answers", () => {
+    expect(extractFinalAnswerFromCodexJsonEvent({
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "user prompt" }
+        ]
+      }
+    })).toBeUndefined();
+  });
+});

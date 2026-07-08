@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandTarget, isPlainSlackChannelMessage, normalizeSlackMessageText, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
+import { commandTarget, isPlainSlackChannelMessage, isPlainWorkspaceCommandText, normalizeSlackMessageText, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
 
 describe("command parser", () => {
   it("tokenizes quoted args", () => {
@@ -110,7 +110,7 @@ describe("command parser", () => {
   });
 
   it("normalizes Slack channel messages into Codex send commands", () => {
-    expect(normalizeSlackMessageText("pwd", "!codex", false)).toBe("send pwd");
+    expect(normalizeSlackMessageText("fix tests", "!codex", false)).toBe("send fix tests");
     expect(normalizeSlackMessageText("$review inspect", "!codex", false)).toBe("send $review inspect");
     expect(normalizeSlackMessageText("!codex pwd", "!codex", false)).toBe("pwd");
     expect(normalizeSlackMessageText("/codex pwd", "!codex", false)).toBeUndefined();
@@ -119,5 +119,16 @@ describe("command parser", () => {
     expect(isPlainSlackChannelMessage("pwd", "!codex", false)).toBe(true);
     expect(isPlainSlackChannelMessage("!codex pwd", "!codex", false)).toBe(false);
     expect(isPlainSlackChannelMessage("/codex pwd", "!codex", false)).toBe(false);
+  });
+
+  it("keeps plain workspace navigation messages as bot commands", () => {
+    expect(normalizeSlackMessageText("cd src", "!codex", false)).toBe("cd src");
+    expect(normalizeSlackMessageText("use api", "!codex", false)).toBe("use api");
+    expect(normalizeSlackMessageText("pwd", "!codex", false)).toBe("pwd");
+    expect(normalizeSlackMessageText("ls tests", "!codex", false)).toBe("ls tests");
+    expect(normalizeSlackMessageText("projects", "!codex", false)).toBe("projects");
+    expect(normalizeSlackMessageText("status please", "!codex", false)).toBe("send status please");
+    expect(isPlainWorkspaceCommandText("cd src", "!codex", false)).toBe(true);
+    expect(isPlainWorkspaceCommandText("!codex cd src", "!codex", false)).toBe(false);
   });
 });

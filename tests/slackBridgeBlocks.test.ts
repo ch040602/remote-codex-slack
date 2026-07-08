@@ -52,4 +52,161 @@ describe("Slack bridge block generation", () => {
 
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  it("defaults newly linked sessions to immediate sends", () => {
+    expect(slackBridgeTestInternals.defaultLinkedSendPolicy).toBe("immediate");
+  });
+
+  it("marks the immediate send-policy action as primary when immediate is active", () => {
+    const blocks = slackBridgeTestInternals.sendPolicyChoiceBlocks("en", "Change send policy?", "immediate");
+    const actions = blocks.find((block: any) => block.type === "actions");
+    const [immediate, confirm, pending] = actions.elements;
+
+    expect(immediate.style).toBe("primary");
+    expect(confirm.style).toBeUndefined();
+    expect(pending.style).toBeUndefined();
+  });
+
+  it("renders turn-started messages as working status updates", () => {
+    const text = slackBridgeTestInternals.renderTurnStartedMessage({
+      turnId: "turn-1",
+      cwd: "C:/repo",
+      sendPolicy: "immediate",
+      createdBinding: true,
+      referencedSkillNames: ["review-driven-development"]
+    });
+
+    expect(text).toContain("Codex is working");
+    expect(text).toContain("turn-1");
+    expect(text).toContain("send policy: `immediate`");
+    expect(text).toContain("$review-driven-development");
+    expect(text).toContain("A completion message will be posted here.");
+  });
+
+  it("renders completed and failed turn messages clearly", () => {
+    const completed = slackBridgeTestInternals.renderTurnCompletedMessage({
+      slackKey: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      codexThreadId: "thread-1",
+      turnId: "turn-1",
+      status: "completed",
+      finalAnswer: "done"
+    });
+    const failed = slackBridgeTestInternals.renderTurnCompletedMessage({
+      slackKey: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      codexThreadId: "thread-1",
+      turnId: "turn-2",
+      status: "failed",
+      finalAnswer: "failed",
+      errorMessage: "boom"
+    });
+
+    expect(completed).toContain("Codex completed");
+    expect(completed).toContain("done");
+    expect(failed).toContain("Codex failed");
+    expect(failed).toContain("error: boom");
+  });
+
+  it("queues send input against the active session scope instead of running immediately", () => {
+    const active: SlackThreadBinding = {
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      codexThreadId: "thread-1",
+      activeTurnId: "turn-1",
+      status: "active",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:00:00.000Z",
+      createdBy: "U1"
+    };
+
+    expect(slackBridgeTestInternals.activeSendQueueTarget(undefined, active, false)).toEqual({
+      scopeKey: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0"
+    });
+    expect(slackBridgeTestInternals.activeSendQueueTarget(active, undefined, true)).toBeUndefined();
+    expect(slackBridgeTestInternals.activeSendQueueTarget({ ...active, status: "idle", activeTurnId: undefined }, undefined, false)).toBeUndefined();
+  });
+
+  it("detects new final answers from externally updated CLI sessions", () => {
+    const binding: SlackThreadBinding = {
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      codexThreadId: "thread-1",
+      activeTurnId: "external-cli:thread-1",
+      status: "active",
+      lastFinalAnswer: "old answer",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:00:00.000Z",
+      createdBy: "U1"
+    };
+
+    const update = slackBridgeTestInternals.externalCliSessionSyncUpdate(binding, {
+      id: "thread-1",
+      cwd: "C:/repo",
+      status: "idle",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:01:00.000Z",
+      path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
+      lastPrompt: "run from cli",
+      lastFinalAnswer: "new answer",
+      commands: [{ timestamp: "2026-07-07T00:00:30.000Z", prompt: "run from cli" }]
+    });
+
+    expect(update).toEqual({
+      patch: {
+        status: "completed",
+        activeTurnId: undefined,
+        lastPrompt: "run from cli",
+        lastFinalAnswer: "new answer",
+        sessionCommands: [{ timestamp: "2026-07-07T00:00:30.000Z", prompt: "run from cli" }],
+        updatedAt: "2026-07-07T00:01:00.000Z"
+      },
+      completion: {
+        slackKey: "C1:1.0",
+        channelId: "C1",
+        threadTs: "1.0",
+        codexThreadId: "thread-1",
+        turnId: "external-cli:thread-1",
+        status: "completed",
+        finalAnswer: "new answer"
+      }
+    });
+  });
+
+  it("does not duplicate Slack-managed CLI completion messages", () => {
+    const binding: SlackThreadBinding = {
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      codexThreadId: "thread-1",
+      activeTurnId: "cli-turn-1",
+      status: "active",
+      lastFinalAnswer: "old answer",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:00:00.000Z",
+      createdBy: "U1"
+    };
+
+    const update = slackBridgeTestInternals.externalCliSessionSyncUpdate(binding, {
+      id: "thread-1",
+      cwd: "C:/repo",
+      status: "idle",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:01:00.000Z",
+      path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
+      lastFinalAnswer: "new answer",
+      commands: []
+    });
+
+    expect(update).toBeUndefined();
+  });
 });

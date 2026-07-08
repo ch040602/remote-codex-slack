@@ -185,12 +185,9 @@ export class CodexCliController extends EventEmitter implements CodexRuntime {
       return;
     }
 
-    if (event.type === "item.completed") {
-      const item = event.item ?? {};
-      if ((item.type === "agent_message" || item.type === "agentMessage") && typeof item.text === "string") {
-        active.finalAnswer = item.text;
-      }
-      return;
+    const finalAnswer = extractFinalAnswerFromCodexJsonEvent(event);
+    if (finalAnswer) {
+      active.finalAnswer = finalAnswer;
     }
 
     if (event.type === "turn.completed") {
@@ -253,4 +250,54 @@ export function normalizeSandbox(value: string | undefined): string | undefined 
     "danger-full-access": "danger-full-access"
   };
   return map[normalized] ?? normalized;
+}
+
+export function extractFinalAnswerFromCodexJsonEvent(event: unknown): string | undefined {
+  if (!isRecord(event)) return undefined;
+  const type = event.type;
+
+  if (type === "item.completed") return extractAssistantText(event.item);
+  if (type === "response_item") return extractAssistantText(event.payload);
+  if (type === "event_msg") return extractAssistantText(event.payload);
+  if (type === "agent_message" || type === "agentMessage") return extractAssistantText(event);
+
+  return undefined;
+}
+
+function extractAssistantText(item: unknown): string | undefined {
+  if (!isRecord(item)) return undefined;
+
+  const type = item.type;
+  const role = item.role;
+  const isAssistantMessage =
+    type === "agent_message" ||
+    type === "agentMessage" ||
+    type === "assistant_message" ||
+    (type === "message" && (role === undefined || role === "assistant"));
+  if (!isAssistantMessage) return undefined;
+
+  const directText = firstString(item.text, item.message);
+  if (directText) return directText;
+
+  const content = item.content;
+  if (!Array.isArray(content)) return undefined;
+
+  const parts = content
+    .map((part) => {
+      if (!isRecord(part)) return undefined;
+      const partType = part.type;
+      if (partType !== undefined && partType !== "output_text" && partType !== "text") return undefined;
+      return typeof part.text === "string" ? part.text : undefined;
+    })
+    .filter((part): part is string => Boolean(part));
+
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

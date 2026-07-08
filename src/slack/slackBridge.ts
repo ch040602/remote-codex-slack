@@ -7,11 +7,11 @@ import type { BridgeConfig, SkillDef } from "../config.js";
 import type { PathResolver, ResolvedWorkspace } from "../core/pathResolver.js";
 import type { LanguageCode, PendingCommand, SendPolicy, SessionCommandRecord, Store, SlackThreadBinding } from "../core/store.js";
 import type { SkillRegistry } from "../core/skills.js";
-import { listCodexCliSessions, type CodexCliSessionCommand } from "../codex/sessionIndex.js";
+import { listCodexCliSessions, type CodexCliSessionCommand, type CodexCliSessionSummary } from "../codex/sessionIndex.js";
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-import { commandTarget, hasOption, isPlainSlackChannelMessage, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
+import { commandTarget, hasOption, isPlainSlackChannelMessage, isPlainWorkspaceCommandText, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
 import { COMMAND_HELP, commandSuggestions, renderCommandSuggestions, type CommandSuggestion } from "../commands/catalog.js";
 import type { ParsedCommand } from "../commands/types.js";
 import { splitForSlack, codeBlock } from "./messageUtils.js";
@@ -30,6 +30,17 @@ interface CommandContext {
   respond?: (message: any) => Promise<any>;
 }
 
+interface PendingScope {
+  scopeKey: string;
+  channelId: string;
+  threadTs?: string;
+}
+
+interface ExternalCliSessionSyncUpdate {
+  patch: Partial<SlackThreadBinding>;
+  completion?: TurnCompletedEvent;
+}
+
 interface AssistActionValue {
   kind: "command" | "skill" | "bind-session" | "session-action" | "pending-action" | "rerun-action" | "ref";
   command?: string;
@@ -40,8 +51,9 @@ interface AssistActionValue {
 }
 
 const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session", "send-mode", "send-policy"]);
-const DEFAULT_LINKED_SEND_POLICY: SendPolicy = "pending";
+const DEFAULT_LINKED_SEND_POLICY: SendPolicy = "immediate";
 const RECENT_SESSIONS_CACHE_MS = 30_000;
+const EXTERNAL_CLI_SYNC_MS = 10_000;
 const MAX_SKILL_PICKER_OPTIONS = 50;
 const SLACK_OPTION_VALUE_LIMIT = 75;
 const ASSIST_ACTION_CACHE_MS = 10 * 60 * 1000;
@@ -55,6 +67,8 @@ interface CommandLookupResult {
 export class SlackBridge {
   readonly app: App;
   private recentSessionsCache?: { expiresAt: number; limit: number; sessions: SlackThreadBinding[] };
+  private externalCliSyncTimer?: ReturnType<typeof setInterval>;
+  private externalCliSyncRunning = false;
 
   constructor(
     private readonly config: BridgeConfig,
@@ -76,6 +90,7 @@ export class SlackBridge {
 
   async start() {
     await this.app.start();
+    this.startExternalCliSessionSync();
     logger.info("Slack bridge started in Socket Mode");
   }
 
@@ -112,13 +127,14 @@ export class SlackBridge {
       if (msg.bot_id || !msg.text || !msg.user) return;
       const isDirectMessage = msg.channel_type === "im";
       const isPlainChannelMessage = isPlainSlackChannelMessage(msg.text, env.commandPrefix, isDirectMessage);
-      if (isPlainChannelMessage && !this.isSendModeEnabled(msg.channel, msg.thread_ts)) return;
+      const isPlainWorkspaceCommand = isPlainWorkspaceCommandText(msg.text, env.commandPrefix, isDirectMessage);
+      if (isPlainChannelMessage && !isPlainWorkspaceCommand && !this.isSendModeEnabled(msg.channel, msg.thread_ts)) return;
       const rawText = normalizeSlackMessageText(msg.text, env.commandPrefix, isDirectMessage);
       if (rawText === undefined) return;
       await this.handleCommand({
         userId: msg.user,
         channelId: msg.channel,
-        threadTs: msg.thread_ts ?? msg.ts,
+        threadTs: isPlainWorkspaceCommand ? msg.thread_ts : msg.thread_ts ?? msg.ts,
         messageTs: msg.ts,
         isSlash: false,
         rawText,
@@ -480,19 +496,19 @@ export class SlackBridge {
     this.invalidateRecentSessions();
     await this.postThreadWithBlocks(ctx.client, threadContext.channelId, threadContext.threadTs, {
       text: [
-      "New same-repo Codex session linked.",
-      `cwd: ${codeInline(workspace.cwd)}`,
-      linkedBinding.codexThreadId ? `codexThreadId: ${codeInline(linkedBinding.codexThreadId)}` : "codexThreadId: pending until the first CLI turn starts",
-      sendMode
-        ? `Send policy was set to ${codeInline(DEFAULT_LINKED_SEND_POLICY)} for safety. Change it?`
-        : "Send mode is off. Use `send <prompt>` / `send -f <prompt>`, or turn send mode on before sending normal chat."
+        "New same-repo Codex session linked.",
+        `cwd: ${codeInline(workspace.cwd)}`,
+        linkedBinding.codexThreadId ? `codexThreadId: ${codeInline(linkedBinding.codexThreadId)}` : "codexThreadId: pending until the first CLI turn starts",
+        sendMode
+          ? `Send policy was set to ${codeInline(DEFAULT_LINKED_SEND_POLICY)}. Normal messages are sent to Codex immediately.`
+          : "Send mode is off. Use `send <prompt>` / `send -f <prompt>`, or turn send mode on before sending normal chat."
       ].join("\n"),
       blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), [
         "New same-repo Codex session linked.",
         `cwd: ${codeInline(workspace.cwd)}`,
         `send policy: ${codeInline(DEFAULT_LINKED_SEND_POLICY)}`,
         "Change send policy?"
-      ].join("\n"))
+      ].join("\n"), DEFAULT_LINKED_SEND_POLICY)
     });
   }
 
@@ -676,17 +692,16 @@ export class SlackBridge {
     this.invalidateRecentSessions();
     const { turnId, referencedSkills } = await this.codex.startTurn(linkedBinding, prompt);
     this.recordSessionCommand(ctx, linkedBinding, "new", prompt);
+    const text = renderTurnStartedMessage({
+      turnId,
+      cwd: workspace.cwd,
+      sendPolicy: DEFAULT_LINKED_SEND_POLICY,
+      createdBinding: true,
+      referencedSkillNames: referencedSkills.map((skill) => skill.name)
+    });
     await this.postThreadWithBlocks(ctx.client, threadContext.channelId, threadContext.threadTs, {
-      text: [
-      `Started Codex turn ${codeInline(turnId)} in ${codeInline(workspace.cwd)}.`,
-      `send policy: ${codeInline(DEFAULT_LINKED_SEND_POLICY)}`,
-      referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
-      ].filter(Boolean).join("\n"),
-      blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), [
-        `Started Codex turn ${codeInline(turnId)} in ${codeInline(workspace.cwd)}.`,
-        `send policy: ${codeInline(DEFAULT_LINKED_SEND_POLICY)}`,
-        "Change send policy?"
-      ].join("\n"))
+      text,
+      blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), `${text}\nChange send policy?`, DEFAULT_LINKED_SEND_POLICY)
     });
   }
 
@@ -701,6 +716,11 @@ export class SlackBridge {
       return;
     }
     if (await this.replyIfUnknownSkills(ctx, prompt)) return;
+    const activeScope = activeSendQueueTarget(this.currentThreadBinding(ctx), this.store.findLatestForChannel(ctx.channelId), isForce(cmd));
+    if (activeScope) {
+      await this.enqueuePending(ctx, { command: "send", prompt }, activeScope, "Queued because Codex is already working on this session.");
+      return;
+    }
     await this.executeBySendPolicy(ctx, cmd, { command: "send", prompt }, () => this.startSend(ctx, prompt));
   }
 
@@ -727,15 +747,17 @@ export class SlackBridge {
     }
     const { turnId, referencedSkills } = await this.codex.sendOrSteer(binding, prompt);
     this.recordSessionCommand(ctx, binding, "send", prompt);
-    const text = [
-      `Sent to Codex turn ${codeInline(turnId)}.`,
-      createdBinding ? `New session linked with send policy ${codeInline(DEFAULT_LINKED_SEND_POLICY)}.` : undefined,
-      referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
-    ].filter(Boolean).join("\n");
+    const text = renderTurnStartedMessage({
+      turnId,
+      cwd: binding.cwd,
+      sendPolicy: createdBinding ? DEFAULT_LINKED_SEND_POLICY : this.sendPolicyForContext(ctx),
+      createdBinding,
+      referencedSkillNames: referencedSkills.map((skill) => skill.name)
+    });
     if (createdBinding) {
       await this.postThreadWithBlocks(ctx.client, binding.channelId, binding.threadTs, {
         text: `${text}\nChange send policy?`,
-        blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), `${text}\nChange send policy?`)
+        blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), `${text}\nChange send policy?`, DEFAULT_LINKED_SEND_POLICY)
       });
     } else {
       await this.postThread(ctx.client, binding.channelId, binding.threadTs, text);
@@ -789,14 +811,16 @@ export class SlackBridge {
     if (prompt) {
       const { turnId, referencedSkills } = await this.codex.startTurn(binding, prompt);
       this.recordSessionCommand(ctx, binding, "send", prompt);
-      const text = [
-        `Resumed ${codeInline(codexThreadId)} and started turn ${codeInline(turnId)}.`,
-        `send policy: ${codeInline(DEFAULT_LINKED_SEND_POLICY)}`,
-        referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
-      ].filter(Boolean).join("\n");
+      const text = renderTurnStartedMessage({
+        turnId,
+        cwd: workspace.cwd,
+        sendPolicy: DEFAULT_LINKED_SEND_POLICY,
+        createdBinding: true,
+        referencedSkillNames: referencedSkills.map((skill) => skill.name)
+      });
       await this.postThreadWithBlocks(ctx.client, binding.channelId, binding.threadTs, {
         text: `${text}\nChange send policy?`,
-        blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), `${text}\nChange send policy?`)
+        blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), `${text}\nChange send policy?`, DEFAULT_LINKED_SEND_POLICY)
       });
     } else {
       await this.postThreadWithBlocks(ctx.client, binding.channelId, binding.threadTs, {
@@ -809,7 +833,7 @@ export class SlackBridge {
           `Resumed Codex thread ${codeInline(codexThreadId)} in ${codeInline(workspace.cwd)}.`,
           `send policy: ${codeInline(DEFAULT_LINKED_SEND_POLICY)}`,
           "Change send policy?"
-        ].join("\n"))
+        ].join("\n"), DEFAULT_LINKED_SEND_POLICY)
       });
     }
   }
@@ -886,10 +910,14 @@ export class SlackBridge {
     const { turnId, referencedSkills } = await this.codex.startTurn(resumed, prompt);
     this.recordSessionCommand(ctx, resumed, "rerun", prompt);
     await this.postThread(ctx.client, target.channelId, target.threadTs, [
-      `Rerun started as turn ${codeInline(turnId)}${selectorLabel ? ` from ${codeInline(selectorLabel)}` : ""}.`,
-      `cwd: ${codeInline(target.cwd)}`,
-      binding.lastFinalAnswer ? `previous last response: ${preview(binding.lastFinalAnswer, 500)}` : undefined,
-      referencedSkills.length ? `Skills: ${referencedSkills.map((s) => codeInline(`$${s.name}`)).join(", ")}` : undefined
+      renderTurnStartedMessage({
+        turnId,
+        cwd: target.cwd,
+        sendPolicy: resumed.sendPolicy ?? this.sendPolicyForContext(ctx),
+        referencedSkillNames: referencedSkills.map((skill) => skill.name)
+      }),
+      selectorLabel ? `Rerun source: ${codeInline(selectorLabel)}` : undefined,
+      binding.lastFinalAnswer ? `previous last response: ${preview(binding.lastFinalAnswer, 500)}` : undefined
     ].filter(Boolean).join("\n"));
   }
 
@@ -1233,20 +1261,26 @@ export class SlackBridge {
     });
   }
 
-  private async enqueuePending(ctx: CommandContext, pending: Omit<PendingCommand, "id" | "scopeKey" | "channelId" | "threadTs" | "createdAt" | "updatedAt" | "createdBy">) {
+  private async enqueuePending(
+    ctx: CommandContext,
+    pending: Omit<PendingCommand, "id" | "scopeKey" | "channelId" | "threadTs" | "createdAt" | "updatedAt" | "createdBy">,
+    scope: PendingScope = { scopeKey: this.pendingScopeKey(ctx), channelId: ctx.channelId, threadTs: ctx.threadTs },
+    reason?: string
+  ) {
     const saved = this.store.addPendingCommand({
       ...pending,
-      scopeKey: this.pendingScopeKey(ctx),
-      channelId: ctx.channelId,
-      threadTs: ctx.threadTs,
+      scopeKey: scope.scopeKey,
+      channelId: scope.channelId,
+      threadTs: scope.threadTs,
       createdBy: ctx.userId
     });
     await this.reply(ctx, [
+      reason,
       `Queued pending command ${codeInline(saved.id)}.`,
       `Run: ${codeInline(`pending-run ${this.store.listPendingCommands(saved.scopeKey).length}`)}`,
       `Edit: ${codeInline(`pending-edit ${this.store.listPendingCommands(saved.scopeKey).length} <new prompt>`)}`,
       `Force immediate execution next time with ${codeInline("-f")} or ${codeInline("--force")}.`
-    ].join("\n"));
+    ].filter(Boolean).join("\n"));
   }
 
   private recordSessionCommand(ctx: CommandContext, binding: SlackThreadBinding, command: PendingCommand["command"], prompt: string) {
@@ -1500,6 +1534,51 @@ export class SlackBridge {
     this.recentSessionsCache = undefined;
   }
 
+  private startExternalCliSessionSync() {
+    if (this.externalCliSyncTimer) return;
+    this.externalCliSyncTimer = setInterval(() => {
+      void this.syncExternalCliSessions();
+    }, EXTERNAL_CLI_SYNC_MS);
+    this.externalCliSyncTimer.unref?.();
+    void this.syncExternalCliSessions();
+  }
+
+  private async syncExternalCliSessions() {
+    if (this.externalCliSyncRunning) return;
+    this.externalCliSyncRunning = true;
+    try {
+      const bindings = this.store
+        .listThreads(500)
+        .filter((binding) => Boolean(binding.codexThreadId && binding.channelId && binding.threadTs));
+      if (bindings.length === 0) return;
+
+      const sessions = listCodexCliSessions({
+        sessionsDir: env.codexSessionsDir,
+        limit: Math.max(100, bindings.length * 2),
+        detectActiveProcesses: true,
+        useCache: false
+      });
+      const byId = new Map(sessions.map((session) => [session.id.toLowerCase(), session]));
+
+      for (const binding of bindings) {
+        if (!binding.codexThreadId) continue;
+        const session = byId.get(binding.codexThreadId.toLowerCase());
+        if (!session) continue;
+        const update = externalCliSessionSyncUpdate(binding, session);
+        if (!update) continue;
+        this.store.updateThread(binding.key, update.patch);
+        this.invalidateRecentSessions();
+        if (update.completion) {
+          await this.postThread(this.app.client, update.completion.channelId, update.completion.threadTs, renderTurnCompletedMessage(update.completion));
+        }
+      }
+    } catch (error) {
+      logger.warn("failed to sync external Codex CLI sessions", { ...errorDetails(error) });
+    } finally {
+      this.externalCliSyncRunning = false;
+    }
+  }
+
   private async materializeSessionBinding(ctx: CommandContext, binding: SlackThreadBinding): Promise<SlackThreadBinding> {
     if (binding.channelId && binding.threadTs && !binding.key.startsWith("codex-cli:")) return binding;
     const threadContext = await this.ensureSlackThread(ctx, `Codex resumed: ${binding.codexThreadId}`);
@@ -1535,12 +1614,12 @@ export class SlackBridge {
         `Channel linked from recent session ${codeInline(session.codexThreadId)}.`,
         `cwd: ${codeInline(session.cwd)}`,
         session.lastFinalAnswer ? `last response: ${preview(session.lastFinalAnswer, 500)}` : undefined,
-        `Send policy was set to ${codeInline(DEFAULT_LINKED_SEND_POLICY)} for safety. Change it?`
+        `Send policy was set to ${codeInline(DEFAULT_LINKED_SEND_POLICY)}. Normal messages are sent to Codex immediately. Change it?`
       ].filter(Boolean).join("\n");
     const posted = await this.chatPostMessage(ctx.client, {
       channel: channelId,
       text: linkedText,
-      blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), linkedText)
+      blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), linkedText, DEFAULT_LINKED_SEND_POLICY)
     });
     if (posted.ts) {
       const key = this.store.threadKey(channelId, posted.ts);
@@ -1619,7 +1698,7 @@ export class SlackBridge {
     ].join("\n");
     await this.postThreadWithBlocks(ctx.client, threadContext.channelId, threadContext.threadTs, {
       text,
-      blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), text)
+      blocks: sendPolicyChoiceBlocks(this.currentLanguage(ctx), text, DEFAULT_LINKED_SEND_POLICY)
     });
   }
 
@@ -1675,11 +1754,7 @@ export class SlackBridge {
   }
 
   private async onTurnCompleted(event: TurnCompletedEvent) {
-    const statusLine = event.status === "completed" ? "Codex final answer" : `Codex ${event.status}`;
-    const text = [`*${statusLine}*`, `thread: ${codeInline(event.codexThreadId)}`, event.errorMessage ? `error: ${event.errorMessage}` : undefined, "", event.finalAnswer]
-      .filter((v) => v !== undefined)
-      .join("\n");
-    await this.postThread(this.app.client, event.channelId, event.threadTs, text);
+    await this.postThread(this.app.client, event.channelId, event.threadTs, renderTurnCompletedMessage(event));
   }
 
   private async reply(ctx: CommandContext, text: string) {
@@ -2057,7 +2132,7 @@ function commandPickerBlocks(language: LanguageCode, query: string, suggestions 
   ];
 }
 
-function sendPolicyChoiceBlocks(language: LanguageCode, text: string): any[] {
+function sendPolicyChoiceBlocks(language: LanguageCode, text: string, activePolicy: SendPolicy = DEFAULT_LINKED_SEND_POLICY): any[] {
   const labels = language === "ko"
     ? { immediate: "즉시 실행", confirm: "버튼 확인", pending: "대기 유지" }
     : { immediate: "Immediate", confirm: "Confirm", pending: "Keep pending" };
@@ -2066,9 +2141,9 @@ function sendPolicyChoiceBlocks(language: LanguageCode, text: string): any[] {
     {
       type: "actions",
       elements: [
-        sessionActionButton(labels.immediate, "send-policy-immediate"),
-        sessionActionButton(labels.confirm, "send-policy-confirm"),
-        sessionActionButton(labels.pending, "send-policy-pending", "primary")
+        sessionActionButton(labels.immediate, "send-policy-immediate", activePolicy === "immediate" ? "primary" : undefined),
+        sessionActionButton(labels.confirm, "send-policy-confirm", activePolicy === "confirm" ? "primary" : undefined),
+        sessionActionButton(labels.pending, "send-policy-pending", activePolicy === "pending" ? "primary" : undefined)
       ]
     }
   ];
@@ -2647,8 +2722,109 @@ function renderSendPolicyStatus(policy: SendPolicy, language: LanguageCode): str
   ].join("\n");
 }
 
+function renderTurnStartedMessage(params: {
+  turnId: string;
+  cwd?: string;
+  sendPolicy: SendPolicy;
+  createdBinding?: boolean;
+  referencedSkillNames?: string[];
+}): string {
+  const skills = params.referencedSkillNames ?? [];
+  return [
+    "*Codex is working*",
+    `turn: ${codeInline(params.turnId)}`,
+    params.cwd ? `cwd: ${codeInline(params.cwd)}` : undefined,
+    `send policy: ${codeInline(params.sendPolicy)}`,
+    params.createdBinding ? "Session linked. Future normal messages in this thread continue here." : undefined,
+    skills.length ? `Skills: ${skills.map((name) => codeInline(`$${name}`)).join(", ")}` : undefined,
+    "A completion message will be posted here."
+  ].filter(Boolean).join("\n");
+}
+
+function renderTurnCompletedMessage(event: TurnCompletedEvent): string {
+  const title = {
+    completed: "Codex completed",
+    failed: "Codex failed",
+    interrupted: "Codex interrupted",
+    idle: "Codex idle",
+    active: "Codex active"
+  } satisfies Record<TurnCompletedEvent["status"], string>;
+  return [
+    `*${title[event.status] ?? `Codex ${event.status}`}*`,
+    `thread: ${codeInline(event.codexThreadId)}`,
+    event.turnId ? `turn: ${codeInline(event.turnId)}` : undefined,
+    event.errorMessage ? `error: ${event.errorMessage}` : undefined,
+    "",
+    event.finalAnswer.trim() || "(no final answer)"
+  ].filter((value) => value !== undefined).join("\n");
+}
+
+function activeSendQueueTarget(current: SlackThreadBinding | undefined, latestForChannel: SlackThreadBinding | undefined, force: boolean): PendingScope | undefined {
+  if (force) return undefined;
+  const binding = current ?? latestForChannel;
+  if (!binding?.codexThreadId || binding.status !== "active" || !binding.activeTurnId) return undefined;
+  return {
+    scopeKey: binding.key,
+    channelId: binding.channelId,
+    threadTs: binding.threadTs
+  };
+}
+
+function externalCliSessionSyncUpdate(binding: SlackThreadBinding, session: CodexCliSessionSummary): ExternalCliSessionSyncUpdate | undefined {
+  if (!binding.codexThreadId || binding.codexThreadId.toLowerCase() !== session.id.toLowerCase()) return undefined;
+
+  const externalTurnId = `external-cli:${session.id}`;
+  const isExternallyTracked = !binding.activeTurnId || binding.activeTurnId === externalTurnId;
+  if (!isExternallyTracked) return undefined;
+
+  const patch: Partial<SlackThreadBinding> = {};
+  if (session.cwd && session.cwd !== binding.cwd) patch.cwd = session.cwd;
+  if (session.lastPrompt && session.lastPrompt !== binding.lastPrompt) patch.lastPrompt = session.lastPrompt;
+  if (session.lastFinalAnswer && session.lastFinalAnswer !== binding.lastFinalAnswer) patch.lastFinalAnswer = session.lastFinalAnswer;
+  if (!sessionCommandsEqual(binding.sessionCommands, session.commands)) patch.sessionCommands = session.commands;
+
+  if (session.status === "active") {
+    if (binding.status !== "active") patch.status = "active";
+    if (binding.activeTurnId !== externalTurnId) patch.activeTurnId = externalTurnId;
+    return Object.keys(patch).length > 0 ? { patch } : undefined;
+  }
+
+  if (binding.status !== "completed") patch.status = "completed";
+  if (binding.activeTurnId !== undefined) patch.activeTurnId = undefined;
+  if (Object.keys(patch).length > 0) patch.updatedAt = session.updatedAt;
+
+  const hasNewFinalAnswer = Boolean(session.lastFinalAnswer && session.lastFinalAnswer !== binding.lastFinalAnswer);
+  if (!hasNewFinalAnswer) {
+    return Object.keys(patch).length > 0 ? { patch } : undefined;
+  }
+
+  return {
+    patch,
+    completion: {
+      slackKey: binding.key,
+      channelId: binding.channelId,
+      threadTs: binding.threadTs,
+      codexThreadId: session.id,
+      turnId: externalTurnId,
+      status: "completed",
+      finalAnswer: session.lastFinalAnswer ?? ""
+    }
+  };
+}
+
+function sessionCommandsEqual(left: SlackThreadBinding["sessionCommands"], right: CodexCliSessionCommand[]): boolean {
+  const a = left ?? [];
+  if (a.length !== right.length) return false;
+  return a.every((command, index) => command.timestamp === right[index]?.timestamp && command.prompt === right[index]?.prompt);
+}
+
 export const slackBridgeTestInternals = {
+  activeSendQueueTarget,
   bindSessionPickerBlocks,
+  defaultLinkedSendPolicy: DEFAULT_LINKED_SEND_POLICY,
+  externalCliSessionSyncUpdate,
+  renderTurnCompletedMessage,
+  renderTurnStartedMessage,
   sendPolicyChoiceBlocks,
   slackSectionText
 };

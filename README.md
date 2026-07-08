@@ -12,9 +12,9 @@ This is not OpenAI's hosted Codex Slack app. It runs on your PC, listens to Slac
 - Start, resume, rerun, and inspect Codex sessions.
 - Show recent Slack-created sessions and existing local Codex CLI sessions.
 - Mark currently running local CLI sessions as `active`.
-- Send Codex final answers back to Slack threads.
+- Post Codex working and completion messages back to Slack threads.
 - Use configured local Codex skills with `$skill-name`.
-- Choose safe send behavior: `immediate`, `confirm`, or `pending`.
+- Choose send behavior: `immediate`, `confirm`, or `pending`.
 - Run in the background on Windows with logs in `data/bridge.log`.
 
 ## Architecture
@@ -203,7 +203,7 @@ Use skills from Slack:
 ```text
 /codex $
 /codex $rev
-/codex send $review inspect this repo
+$review inspect this repo
 !codex send $test-fixer fix failing tests
 ```
 
@@ -276,7 +276,7 @@ Use the buttons:
 - `Immediate`, `Confirm`, `Pending`: choose how runnable input is handled.
 - `Status`, `Recent`: inspect current and recent sessions.
 
-Newly linked sessions default to `pending` for safety and ask whether to switch mode.
+Newly linked sessions default to `immediate`, so normal messages in the linked thread are sent to Codex without writing `send`. If Codex is already working on that session, additional `send` input or normal messages are queued as pending commands instead of trying to interrupt the active turn. Workspace navigation messages that start with `cd`, `use`, `pwd`, `ls`, or `projects` stay local bot commands, so `cd src` changes the Slack-bound cwd instead of being forwarded to Codex. The bot posts a working message when a turn starts and a completion message with the final answer when the turn finishes.
 
 ## Desktop Workflow
 
@@ -309,7 +309,7 @@ npm start
 7. Continue in the created thread:
 
 ```text
-!codex send implement the first fix
+implement the first fix
 ```
 
 ## Mobile Workflow
@@ -331,10 +331,10 @@ npm start
 
 6. Tap `New session` or `Bind recent`.
 7. Open the created or bound thread.
-8. In threads, use the prefix because Slack slash commands do not work inside threads:
+8. Send a normal thread reply to continue the Codex session:
 
 ```text
-!codex send focus on the smallest safe change
+focus on the smallest safe change
 ```
 
 ## Commands
@@ -350,6 +350,15 @@ Help and suggestions:
 ```
 
 Workspace:
+
+```text
+pwd
+ls
+cd <project-or-path>
+projects
+```
+
+The explicit slash command form remains available everywhere slash commands work:
 
 ```text
 /codex pwd
@@ -415,6 +424,8 @@ Each entry shows:
 - Last response.
 
 `active` means the Codex JSONL log has an unfinished turn or a currently running local `codex` process references the session ID. This works even for sessions started directly from a terminal instead of Slack.
+
+After a local CLI session is bound to a Slack channel or thread, the bridge polls `CODEX_SESSIONS_DIR` and posts a completion message when that external CLI session writes a new final answer. This lets Slack receive the last response even when the actual Codex command was run from a terminal instead of through Slack. Slack-managed turns still use their normal completion event, so the poller skips active turns started by the bridge to avoid duplicate messages.
 
 ## Channel Creation
 
