@@ -12,7 +12,7 @@ This is not OpenAI's hosted Codex Slack app. It runs on your PC, listens to Slac
 - Start, resume, rerun, and inspect Codex sessions.
 - Show recent Slack-created sessions and existing local Codex CLI sessions.
 - Mark currently running local CLI sessions as `active`.
-- Post Codex working and completion messages back to Slack threads.
+- Post Codex working messages in Slack threads and broadcast final/new assistant answers to the channel.
 - Use configured local Codex skills with `$skill-name`.
 - Choose send behavior: `immediate`, `confirm`, or `pending`.
 - Run in the background on Windows with logs in `data/bridge.log`.
@@ -277,7 +277,9 @@ Use the buttons:
 - `Immediate`, `Confirm`, `Pending`: choose how runnable input is handled.
 - `Status`, `Recent`: inspect current and recent sessions.
 
-Newly linked sessions default to `immediate`, so normal messages in the linked thread are sent to Codex without writing `send`. If Codex is already working on that session, additional `send` input or normal messages are queued as pending commands instead of trying to interrupt the active turn. Workspace navigation messages that start with `cd`, `use`, `pwd`, `ls`, or `projects` stay local bot commands, so `cd src` changes the Slack-bound cwd instead of being forwarded to Codex. The bot posts a working message when a turn starts and a completion message with the final answer when the turn finishes.
+Newly linked sessions default to `immediate`, so normal messages in the linked thread are sent to Codex without writing `send`. If Codex is already working on that session, additional `send` input or normal messages are queued as pending commands instead of trying to interrupt the active turn. Workspace navigation messages that start with `cd`, `use`, `pwd`, `ls`, or `projects` stay local bot commands, so `cd src` changes the Slack-bound cwd instead of being forwarded to Codex.
+
+The bot posts a working message in the thread when a turn starts. Final answers and newly detected local CLI assistant answers are posted as thread replies with Slack `reply_broadcast`, so the answer also appears in the channel instead of being hidden only inside the thread.
 
 ## Desktop Workflow
 
@@ -427,6 +429,8 @@ Each entry shows:
 `active` means the Codex JSONL log has an unfinished turn or a currently running local `codex` process references the session ID. This works even for sessions started directly from a terminal instead of Slack.
 
 After a local CLI session is bound to a Slack channel or thread, the bridge polls `CODEX_SESSIONS_DIR` and posts a Slack message whenever that external CLI session writes a new assistant answer. This still works when the terminal Codex process remains open and the session appears `active`. Slack-managed turns use their normal completion event, so the poller skips active turns started by the bridge to avoid duplicate messages.
+
+Those answer messages are broadcast to the channel from the linked thread. Long answers may continue in additional thread-only chunks after the broadcasted first message.
 
 ## Channel Creation
 

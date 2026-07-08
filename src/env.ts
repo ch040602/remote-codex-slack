@@ -27,7 +27,7 @@ export const env = {
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET ?? "",
   allowedSlackUserIds: parseCsv(process.env.ALLOWED_SLACK_USER_IDS),
   allowAllSlackUsers: bool(process.env.ALLOW_ALL_SLACK_USERS, false),
-  commandPrefix: process.env.SLACK_COMMAND_PREFIX ?? "!codex",
+  commandPrefix: process.env.SLACK_COMMAND_PREFIX ?? "",
   navigationRoot: process.env.CODEX_NAV_ROOT ?? path.join(os.homedir(), "Desktop"),
   codexDriver: process.env.CODEX_DRIVER ?? "cli",
   codexBin: process.env.CODEX_BIN ?? "codex",

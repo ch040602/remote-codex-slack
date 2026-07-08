@@ -27,9 +27,10 @@ describe("command suggestions", () => {
 
   it("renders precomputed suggestions without recomputing the lookup", () => {
     const suggestions = commandSuggestions("send-p", 3);
-    const rendered = renderCommandSuggestions("send-p", "en", "!codex", suggestions);
+    const rendered = renderCommandSuggestions("send-p", "en", "", suggestions);
     expect(rendered).toContain("Command suggestions");
     expect(rendered).toContain("send-policy immediate|confirm|pending|status");
+    expect(rendered).toContain("Example: `send-policy immediate|confirm|pending|status`");
   });
 
   it("documents force support for rerunning command history", () => {

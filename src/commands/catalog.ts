@@ -74,9 +74,10 @@ export function renderCommandSuggestions(query: string, language: LanguageCode, 
   const title = language === "ko"
     ? normalized ? `명령어 추천: ${codeInline(query)}` : "사용 가능한 명령어:"
     : normalized ? `Command suggestions for ${codeInline(query)}:` : "Available commands:";
+  const example = [prefix.trim(), suggestions[0].entry.usage].filter(Boolean).join(" ");
   const hint = language === "ko"
-    ? `실행 예: ${codeInline(`${prefix} ${suggestions[0].entry.usage}`)}`
-    : `Example: ${codeInline(`${prefix} ${suggestions[0].entry.usage}`)}`;
+    ? `실행 예: ${codeInline(example)}`
+    : `Example: ${codeInline(example)}`;
 
   return [
     title,
