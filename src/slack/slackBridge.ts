@@ -11,7 +11,7 @@ import { listCodexCliSessions, type CodexCliSessionCommand, type CodexCliSession
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
-import { commandTarget, hasOption, isPlainSlackChannelMessage, isPlainWorkspaceCommandText, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
+import { commandTarget, hasOption, isPlainBotCommandText, isPlainSlackChannelMessage, normalizeSlackMessageText, optionString, parseCommand, stripBotMention } from "../commands/parser.js";
 import { COMMAND_HELP, commandSuggestions, renderCommandSuggestions, type CommandSuggestion } from "../commands/catalog.js";
 import type { ParsedCommand } from "../commands/types.js";
 import { splitForSlack, codeBlock } from "./messageUtils.js";
@@ -127,14 +127,14 @@ export class SlackBridge {
       if (msg.bot_id || !msg.text || !msg.user) return;
       const isDirectMessage = msg.channel_type === "im";
       const isPlainChannelMessage = isPlainSlackChannelMessage(msg.text, env.commandPrefix, isDirectMessage);
-      const isPlainWorkspaceCommand = isPlainWorkspaceCommandText(msg.text, env.commandPrefix, isDirectMessage);
-      if (isPlainChannelMessage && !isPlainWorkspaceCommand && !this.isSendModeEnabled(msg.channel, msg.thread_ts)) return;
+      const isPlainBotCommand = isPlainBotCommandText(msg.text, env.commandPrefix, isDirectMessage);
+      if (isPlainChannelMessage && !isPlainBotCommand && !this.isSendModeEnabled(msg.channel, msg.thread_ts)) return;
       const rawText = normalizeSlackMessageText(msg.text, env.commandPrefix, isDirectMessage);
       if (rawText === undefined) return;
       await this.handleCommand({
         userId: msg.user,
         channelId: msg.channel,
-        threadTs: isPlainWorkspaceCommand ? msg.thread_ts : msg.thread_ts ?? msg.ts,
+        threadTs: isPlainBotCommand ? msg.thread_ts : msg.thread_ts ?? msg.ts,
         messageTs: msg.ts,
         isSlash: false,
         rawText,
@@ -1569,7 +1569,7 @@ export class SlackBridge {
         this.store.updateThread(binding.key, update.patch);
         this.invalidateRecentSessions();
         if (update.completion) {
-          await this.postThread(this.app.client, update.completion.channelId, update.completion.threadTs, renderTurnCompletedMessage(update.completion));
+          await this.postThread(this.app.client, update.completion.channelId, update.completion.threadTs, renderTurnCompletedMessage(update.completion), { broadcastFirstReply: true });
         }
       }
     } catch (error) {
@@ -1691,8 +1691,8 @@ export class SlackBridge {
       `cwd: ${codeInline(session.cwd)}`,
       `send policy: ${codeInline(DEFAULT_LINKED_SEND_POLICY)}`,
       this.sendModeForContext(ctx)
-        ? "Send mode is on: normal channel messages, `send`, `$skill ...`, and prefixed messages continue this session."
-        : "Send mode is off: use `send <prompt>`, `$skill ...`, or the configured prefix to continue this session.",
+        ? "Send mode is on: normal channel/thread messages, `send`, `$skill ...`, and plain bot commands work here."
+        : "Send mode is off: use `send <prompt>`, `$skill ...`, `/codex` in a channel, or @bot to continue this session.",
       "Messages starting with `/` stay Slack bot commands.",
       "Change send policy?"
     ].join("\n");
@@ -1754,7 +1754,7 @@ export class SlackBridge {
   }
 
   private async onTurnCompleted(event: TurnCompletedEvent) {
-    await this.postThread(this.app.client, event.channelId, event.threadTs, renderTurnCompletedMessage(event));
+    await this.postThread(this.app.client, event.channelId, event.threadTs, renderTurnCompletedMessage(event), { broadcastFirstReply: true });
   }
 
   private async reply(ctx: CommandContext, text: string) {
@@ -1825,11 +1825,11 @@ export class SlackBridge {
     return false;
   }
 
-  private async postThread(clientOrCtx: WebClient | CommandContext, channel: string, threadTs: string | undefined, text: string) {
+  private async postThread(clientOrCtx: WebClient | CommandContext, channel: string, threadTs: string | undefined, text: string, options: { broadcastFirstReply?: boolean } = {}) {
     const client = "client" in clientOrCtx ? clientOrCtx.client : clientOrCtx;
     const chunks = splitForSlack(text, env.slackMaxMessageChars);
-    for (const chunk of chunks) {
-      await this.chatPostMessage(client, { channel, thread_ts: threadTs, text: chunk });
+    for (const [index, chunk] of chunks.entries()) {
+      await this.chatPostMessage(client, threadPostMessageParams(channel, threadTs, chunk, Boolean(options.broadcastFirstReply && index === 0)));
     }
   }
 
@@ -2684,7 +2684,7 @@ function renderSendModeStatus(enabled: boolean, language: LanguageCode): string 
       `Send mode: ${codeInline(enabled ? "on" : "off")}`,
       enabled
         ? "일반 채널/스레드 메시지는 Codex 입력으로 들어갑니다. 실행 방식은 `send-policy`가 결정합니다."
-        : "일반 채널/스레드 메시지는 Codex로 보내지지 않습니다. `/codex send ...`, `!codex send ...`, 또는 mention/DM을 사용하세요.",
+        : "일반 채널/스레드 메시지는 Codex로 보내지지 않습니다. 채널에서는 `/codex send ...`, 스레드에서는 @bot mention 또는 DM을 사용하세요.",
       "변경: `send-mode on` / `send-mode off`"
     ].join("\n");
   }
@@ -2692,7 +2692,7 @@ function renderSendModeStatus(enabled: boolean, language: LanguageCode): string 
     `Send mode: ${codeInline(enabled ? "on" : "off")}`,
     enabled
       ? "Normal channel/thread messages are accepted as Codex input. Execution is controlled by `send-policy`."
-      : "Normal channel/thread messages are not sent to Codex. Use `/codex send ...`, `!codex send ...`, mentions, or DMs.",
+      : "Normal channel/thread messages are not sent to Codex. Use `/codex send ...` in channels, or @bot mentions / DMs in threads.",
     "Change: `send-mode on` / `send-mode off`"
   ].join("\n");
 }
@@ -2770,6 +2770,18 @@ function activeSendQueueTarget(current: SlackThreadBinding | undefined, latestFo
   };
 }
 
+function threadPostMessageParams(channel: string, threadTs: string | undefined, text: string, broadcastReply: boolean): Parameters<WebClient["chat"]["postMessage"]>[0] {
+  const params = {
+    channel,
+    thread_ts: threadTs,
+    text
+  } as Parameters<WebClient["chat"]["postMessage"]>[0];
+  if (broadcastReply && threadTs) {
+    (params as Parameters<WebClient["chat"]["postMessage"]>[0] & { reply_broadcast: boolean }).reply_broadcast = true;
+  }
+  return params;
+}
+
 function externalCliSessionSyncUpdate(binding: SlackThreadBinding, session: CodexCliSessionSummary): ExternalCliSessionSyncUpdate | undefined {
   if (!binding.codexThreadId || binding.codexThreadId.toLowerCase() !== session.id.toLowerCase()) return undefined;
 
@@ -2782,18 +2794,33 @@ function externalCliSessionSyncUpdate(binding: SlackThreadBinding, session: Code
   if (session.lastPrompt && session.lastPrompt !== binding.lastPrompt) patch.lastPrompt = session.lastPrompt;
   if (session.lastFinalAnswer && session.lastFinalAnswer !== binding.lastFinalAnswer) patch.lastFinalAnswer = session.lastFinalAnswer;
   if (!sessionCommandsEqual(binding.sessionCommands, session.commands)) patch.sessionCommands = session.commands;
+  const hasNewFinalAnswer = Boolean(session.lastFinalAnswer && session.lastFinalAnswer !== binding.lastFinalAnswer);
 
   if (session.status === "active") {
     if (binding.status !== "active") patch.status = "active";
     if (binding.activeTurnId !== externalTurnId) patch.activeTurnId = externalTurnId;
-    return Object.keys(patch).length > 0 ? { patch } : undefined;
+    if (Object.keys(patch).length > 0) patch.updatedAt = session.updatedAt;
+    if (!hasNewFinalAnswer) {
+      return Object.keys(patch).length > 0 ? { patch } : undefined;
+    }
+    return {
+      patch,
+      completion: {
+        slackKey: binding.key,
+        channelId: binding.channelId,
+        threadTs: binding.threadTs,
+        codexThreadId: session.id,
+        turnId: externalTurnId,
+        status: "active",
+        finalAnswer: session.lastFinalAnswer ?? ""
+      }
+    };
   }
 
   if (binding.status !== "completed") patch.status = "completed";
   if (binding.activeTurnId !== undefined) patch.activeTurnId = undefined;
   if (Object.keys(patch).length > 0) patch.updatedAt = session.updatedAt;
 
-  const hasNewFinalAnswer = Boolean(session.lastFinalAnswer && session.lastFinalAnswer !== binding.lastFinalAnswer);
   if (!hasNewFinalAnswer) {
     return Object.keys(patch).length > 0 ? { patch } : undefined;
   }
@@ -2826,7 +2853,8 @@ export const slackBridgeTestInternals = {
   renderTurnCompletedMessage,
   renderTurnStartedMessage,
   sendPolicyChoiceBlocks,
-  slackSectionText
+  slackSectionText,
+  threadPostMessageParams
 };
 
 function helpText(prefix: string, language: LanguageCode): string {
@@ -2853,7 +2881,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: 대기 명령 관리",
       "- `language en|ko`: 안내 언어 변경",
       "",
-      `Send mode가 켜져 있을 때만 일반 채널 메시지가 현재 세션 입력으로 들어갑니다. 기본 send policy는 \`immediate\`이고, \`confirm\` 또는 \`pending\`으로 바꿀 수 있습니다. \`/\`로 시작하는 입력은 Slack bot command로만 처리됩니다. Thread에서는 \`${prefix}\` 또는 @bot을 사용하세요.`
+      "Send mode가 켜져 있을 때 일반 채널/스레드 메시지가 현재 세션 입력으로 들어갑니다. 기본 send policy는 `immediate`이고, `confirm` 또는 `pending`으로 바꿀 수 있습니다. `/`로 시작하는 입력은 Slack slash command로만 처리됩니다. Thread에서는 일반 reply로 Codex에 입력하고, `recent`, `history 2`, `pending` 같은 plain bot command도 사용할 수 있습니다."
     ].join("\n");
   }
 
@@ -2879,6 +2907,6 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: manage queued commands",
     "- `language en|ko`: change help language",
     "",
-    `Normal channel messages become current-session input only when send mode is on. The default send policy is \`immediate\`; switch to \`confirm\` or \`pending\` when you want more review. Messages starting with \`/\` stay Slack bot commands. In threads, use \`${prefix}\` or @bot.`
+    "Normal channel/thread messages become current-session input when send mode is on. The default send policy is `immediate`; switch to `confirm` or `pending` when you want more review. Messages starting with `/` stay Slack slash commands. In linked threads, use normal replies for Codex input and plain bot commands such as `recent`, `history 2`, or `pending`."
   ].join("\n");
 }

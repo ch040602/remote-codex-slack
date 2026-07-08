@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandTarget, isPlainSlackChannelMessage, isPlainWorkspaceCommandText, normalizeSlackMessageText, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
+import { commandTarget, isPlainBotCommandText, isPlainSlackChannelMessage, isPlainWorkspaceCommandText, normalizeSlackMessageText, parseCommand, stripPrefix, tokenize } from "../src/commands/parser.js";
 
 describe("command parser", () => {
   it("tokenizes quoted args", () => {
@@ -130,5 +130,14 @@ describe("command parser", () => {
     expect(normalizeSlackMessageText("status please", "!codex", false)).toBe("send status please");
     expect(isPlainWorkspaceCommandText("cd src", "!codex", false)).toBe(true);
     expect(isPlainWorkspaceCommandText("!codex cd src", "!codex", false)).toBe(false);
+  });
+
+  it("keeps plain Slack bot commands as commands without a bang prefix", () => {
+    expect(normalizeSlackMessageText("bind-session 2", "!codex", false)).toBe("bind-session 2");
+    expect(normalizeSlackMessageText("recent", "!codex", false)).toBe("recent");
+    expect(normalizeSlackMessageText("history 2", "!codex", false)).toBe("history 2");
+    expect(normalizeSlackMessageText("send-policy pending", "!codex", false)).toBe("send-policy pending");
+    expect(normalizeSlackMessageText("status please", "!codex", false)).toBe("send status please");
+    expect(isPlainBotCommandText("bind-session 2", "!codex", false)).toBe(true);
   });
 });

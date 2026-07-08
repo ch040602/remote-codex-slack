@@ -110,6 +110,20 @@ describe("Slack bridge block generation", () => {
     expect(failed).toContain("error: boom");
   });
 
+  it("broadcasts completion replies to the channel while keeping non-thread posts normal", () => {
+    expect(slackBridgeTestInternals.threadPostMessageParams("C1", "1.0", "done", true)).toEqual({
+      channel: "C1",
+      thread_ts: "1.0",
+      text: "done",
+      reply_broadcast: true
+    });
+    expect(slackBridgeTestInternals.threadPostMessageParams("C1", undefined, "done", true)).toEqual({
+      channel: "C1",
+      thread_ts: undefined,
+      text: "done"
+    });
+  });
+
   it("queues send input against the active session scope instead of running immediately", () => {
     const active: SlackThreadBinding = {
       key: "C1:1.0",
@@ -178,6 +192,50 @@ describe("Slack bridge block generation", () => {
         status: "completed",
         finalAnswer: "new answer"
       }
+    });
+  });
+
+  it("posts new external CLI answers even while the CLI process remains active", () => {
+    const binding: SlackThreadBinding = {
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      codexThreadId: "thread-1",
+      activeTurnId: "external-cli:thread-1",
+      status: "active",
+      lastFinalAnswer: "old answer",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:00:00.000Z",
+      createdBy: "U1"
+    };
+
+    const update = slackBridgeTestInternals.externalCliSessionSyncUpdate(binding, {
+      id: "thread-1",
+      cwd: "C:/repo",
+      status: "active",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:01:00.000Z",
+      path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
+      lastPrompt: "run from cli",
+      lastFinalAnswer: "new active-process answer",
+      commands: [{ timestamp: "2026-07-07T00:00:30.000Z", prompt: "run from cli" }]
+    });
+
+    expect(update?.patch).toMatchObject({
+      lastPrompt: "run from cli",
+      lastFinalAnswer: "new active-process answer",
+      sessionCommands: [{ timestamp: "2026-07-07T00:00:30.000Z", prompt: "run from cli" }],
+      updatedAt: "2026-07-07T00:01:00.000Z"
+    });
+    expect(update?.completion).toMatchObject({
+      slackKey: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      codexThreadId: "thread-1",
+      turnId: "external-cli:thread-1",
+      status: "active",
+      finalAnswer: "new active-process answer"
     });
   });
 

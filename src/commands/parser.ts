@@ -39,6 +39,38 @@ const KNOWN = new Set<CommandName>([
 
 const BOOLEAN_OPTIONS = new Set(["force"]);
 const PLAIN_WORKSPACE_COMMANDS = new Set(["cd", "use", "pwd", "ls", "projects"]);
+const PLAIN_BOT_COMMANDS_WITH_ARGS = new Set([
+  ...PLAIN_WORKSPACE_COMMANDS,
+  "commands",
+  "skills",
+  "language",
+  "lang",
+  "언어",
+  "send-mode",
+  "send-policy",
+  "resume",
+  "rerun-session",
+  "recent",
+  "sessions",
+  "active",
+  "history",
+  "rerun-command",
+  "pending",
+  "pending-edit",
+  "pending-drop",
+  "pending-run",
+  "bind-session"
+]);
+const PLAIN_BOT_COMMANDS_EXACT = new Set([
+  "help",
+  "session",
+  "s",
+  "rerun",
+  "pending",
+  "status",
+  "stop",
+  "unbind-session"
+]);
 
 export function stripBotMention(text: string): string {
   return text.replace(/^<@[A-Z0-9]+>\s*/, "").trim();
@@ -59,8 +91,18 @@ export function normalizeSlackMessageText(text: string, commandPrefix: string, i
 
   const trimmed = text.trim();
   if (!trimmed || trimmed.startsWith("/")) return undefined;
-  if (isPlainWorkspaceCommandText(trimmed, commandPrefix, isDirectMessage)) return trimmed;
+  if (isPlainBotCommandText(trimmed, commandPrefix, isDirectMessage)) return trimmed;
   return isDirectMessage ? trimmed : `send ${trimmed}`;
+}
+
+export function isPlainBotCommandText(text: string, commandPrefix: string, isDirectMessage: boolean): boolean {
+  if (isDirectMessage) return false;
+  if (stripPrefix(text, commandPrefix) !== undefined) return false;
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.startsWith("/")) return false;
+  const tokens = tokenize(trimmed);
+  const head = tokens[0]?.toLowerCase() ?? "";
+  return PLAIN_BOT_COMMANDS_WITH_ARGS.has(head) || (tokens.length === 1 && PLAIN_BOT_COMMANDS_EXACT.has(head));
 }
 
 export function isPlainWorkspaceCommandText(text: string, commandPrefix: string, isDirectMessage: boolean): boolean {

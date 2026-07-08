@@ -23,7 +23,7 @@ This is not OpenAI's hosted Codex Slack app. It runs on your PC, listens to Slac
 Slack desktop/mobile
   |-- /codex slash command
   |-- @bot mention
-  |-- !codex prefix
+  |-- plain bot commands such as bind-session, recent, history, pending
   `-- normal channel message when send mode is on
         |
         v
@@ -133,7 +133,8 @@ Edit `.env`:
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 ALLOWED_SLACK_USER_IDS=U0123456789
-SLACK_COMMAND_PREFIX=!codex
+# Optional legacy message prefix. Leave empty when you use /codex, @bot, and plain commands.
+SLACK_COMMAND_PREFIX=
 
 CODEX_BIN=codex
 CODEX_DRIVER=cli
@@ -204,7 +205,7 @@ Use skills from Slack:
 /codex $
 /codex $rev
 $review inspect this repo
-!codex send $test-fixer fix failing tests
+$test-fixer fix failing tests
 ```
 
 Slack bots cannot display a live popup while you are still typing in the normal message composer. Instead, send `$`, `$prefix`, or a prompt containing unfinished `$` / `$prefix`; the bridge replies with a Slack picker. Choosing a skill replaces the token and continues the normal send flow.
@@ -425,7 +426,7 @@ Each entry shows:
 
 `active` means the Codex JSONL log has an unfinished turn or a currently running local `codex` process references the session ID. This works even for sessions started directly from a terminal instead of Slack.
 
-After a local CLI session is bound to a Slack channel or thread, the bridge polls `CODEX_SESSIONS_DIR` and posts a completion message when that external CLI session writes a new final answer. This lets Slack receive the last response even when the actual Codex command was run from a terminal instead of through Slack. Slack-managed turns still use their normal completion event, so the poller skips active turns started by the bridge to avoid duplicate messages.
+After a local CLI session is bound to a Slack channel or thread, the bridge polls `CODEX_SESSIONS_DIR` and posts a Slack message whenever that external CLI session writes a new assistant answer. This still works when the terminal Codex process remains open and the session appears `active`. Slack-managed turns use their normal completion event, so the poller skips active turns started by the bridge to avoid duplicate messages.
 
 ## Channel Creation
 
@@ -473,7 +474,7 @@ If you still see an error:
 
 ## Limitations
 
-- Slack slash commands do not run inside Slack threads. Use `@bot` or `!codex` in threads.
+- Slack slash commands do not run inside Slack threads. Use normal linked-thread replies for Codex input, plain bot commands such as `recent` or `history 2`, or `@bot` mentions.
 - CLI mode cannot steer an already running `codex exec` process. Wait for the turn to finish, then send again.
 - True live autocomplete while typing `$` in a normal Slack message is not available to Slack bot apps; the bridge uses message-based pickers.
 - End-to-end Slack validation requires real Slack tokens and a workspace install.
