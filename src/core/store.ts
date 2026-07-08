@@ -4,6 +4,7 @@ import path from "node:path";
 export type SessionStatus = "idle" | "active" | "completed" | "failed" | "interrupted";
 export type LanguageCode = "en" | "ko";
 export type SendPolicy = "immediate" | "confirm" | "pending";
+export type NotifyMode = "final-only" | "answer-updates";
 
 export interface ChannelBinding {
   channelId: string;
@@ -11,6 +12,7 @@ export interface ChannelBinding {
   cwd: string;
   sendMode?: boolean;
   sendPolicy?: SendPolicy;
+  notifyMode?: NotifyMode;
   language?: LanguageCode;
   updatedAt: string;
   updatedBy: string;
@@ -31,6 +33,7 @@ export interface SlackThreadBinding {
   title?: string;
   sendMode?: boolean;
   sendPolicy?: SendPolicy;
+  notifyMode?: NotifyMode;
   language?: LanguageCode;
   updatedAt: string;
   createdAt: string;

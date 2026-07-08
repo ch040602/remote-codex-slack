@@ -14,6 +14,7 @@ export type CommandName =
   | "send"
   | "send-mode"
   | "send-policy"
+  | "notify-mode"
   | "session"
   | "s"
   | "steer"

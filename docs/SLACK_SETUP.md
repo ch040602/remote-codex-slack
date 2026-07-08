@@ -50,12 +50,12 @@ Create a slash command:
 Command: /codex
 Request URL: use any valid placeholder if Slack requires one; Socket Mode will deliver the command.
 Short description: Control local Codex
-Usage hint: s | send-mode on|off | send-policy immediate|confirm|pending | ? | $ | pwd | ls | cd <path> | send <prompt>
+Usage hint: s | send-mode on|off | send-policy immediate|confirm|pending | notify-mode final-only|answer-updates | ? | $ | pwd | ls | cd <path> | send <prompt>
 ```
 
 Slash commands are not available inside Slack threads. In a linked thread, normal replies are sent to Codex while send mode is on. Plain bot commands such as `bind-session 2`, `recent`, `history 2`, and `pending` also work without a bang prefix.
 
-After a channel is bound to a workspace/session, normal channel and thread messages are treated as `send <message>` while send mode is on. Workspace navigation messages that start with `cd`, `use`, `pwd`, `ls`, or `projects` stay local bot commands, so `cd src` changes the Slack-bound cwd instead of being forwarded to Codex. These workspace commands also work when send mode is off. Send mode defaults to on, and you can turn it off with `/codex send-mode off` or the `/codex s` button menu. The default send policy is `immediate`, including newly linked sessions, so the bridge behaves like a ChatGPT-style Slack chat by default. If Codex is already working on that session, additional normal messages or `send` input are queued as pending commands instead of interrupting the active turn. The bot posts a working message when a turn starts and a completion message with the final answer when the turn finishes. Use `send-policy confirm` for Run now / Keep queued / Cancel buttons, or `send-policy pending` to queue all runnable input. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
+After a channel is bound to a workspace/session, normal channel and thread messages are treated as `send <message>` while send mode is on. Workspace navigation messages that start with `cd`, `use`, `pwd`, `ls`, or `projects` stay local bot commands, so `cd src` changes the Slack-bound cwd instead of being forwarded to Codex. These workspace commands also work when send mode is off. Send mode defaults to on, and you can turn it off with `/codex send-mode off` or the `/codex s` button menu. The default send policy is `immediate`, including newly linked sessions, so the bridge behaves like a ChatGPT-style Slack chat by default. If Codex is already working on that session, additional normal messages or `send` input are queued as pending commands instead of interrupting the active turn. The default notify mode is `final-only`, so Slack channel notifications are posted only when a final answer is available. Use `notify-mode answer-updates` only when you also want in-progress answer updates from externally running CLI sessions. Use `send-policy confirm` for Run now / Keep queued / Cancel buttons, or `send-policy pending` to queue all runnable input. Messages that start with `/` are reserved for Slack slash commands and are not forwarded to Codex by the message listener.
 
 For the simplest session workflow, use:
 
@@ -63,7 +63,7 @@ For the simplest session workflow, use:
 /codex s
 ```
 
-This opens buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Immediate`, `Confirm`, `Pending`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
+This opens buttons for `New session`, `Bind recent`, `Unbind`, `Send mode on/off`, `Immediate`, `Confirm`, `Pending`, `Final only`, `Answer updates`, `Status`, and `Recent`. On desktop, type `/codex s` and click the button. On mobile, send `/codex s` and tap the button or picker in the bot response.
 
 In a newly created public Slack channel, you can run `/codex s`, `/codex cd <path>`, `/codex bind-session`, or `/codex new ...` directly in that channel. If the bot is not already a member, the bridge uses `channels:join` to join before posting the session thread, so the current channel becomes the linked Codex channel. For private channels, invite the app to the channel first.
 
@@ -225,6 +225,8 @@ Codex execution commands use `send-policy immediate` by default, including newly
 /codex send-policy immediate
 /codex send-policy confirm
 /codex send-policy pending
+/codex notify-mode final-only
+/codex notify-mode answer-updates
 ```
 
 Use pending commands to review/edit queued work before execution:

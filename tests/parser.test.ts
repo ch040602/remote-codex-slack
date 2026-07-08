@@ -53,6 +53,8 @@ describe("command parser", () => {
     expect(parseCommand("send-mode off").args).toEqual(["off"]);
     expect(parseCommand("send-policy confirm").name).toBe("send-policy");
     expect(parseCommand("send-policy pending").args).toEqual(["pending"]);
+    expect(parseCommand("notify-mode answer-updates").name).toBe("notify-mode");
+    expect(parseCommand("notify-mode answer-updates").args).toEqual(["answer-updates"]);
     expect(parseCommand("bind-session 2").name).toBe("bind-session");
     expect(parseCommand(["bind", "channel api"].join("-")).name).toBe("send");
     expect(parseCommand("unbind-session").name).toBe("unbind-session");
@@ -137,6 +139,7 @@ describe("command parser", () => {
     expect(normalizeSlackMessageText("recent", "!codex", false)).toBe("recent");
     expect(normalizeSlackMessageText("history 2", "!codex", false)).toBe("history 2");
     expect(normalizeSlackMessageText("send-policy pending", "!codex", false)).toBe("send-policy pending");
+    expect(normalizeSlackMessageText("notify-mode final-only", "!codex", false)).toBe("notify-mode final-only");
     expect(normalizeSlackMessageText("status please", "!codex", false)).toBe("send status please");
     expect(isPlainBotCommandText("bind-session 2", "!codex", false)).toBe(true);
   });

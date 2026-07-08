@@ -278,6 +278,46 @@ describe("Slack bridge block generation", () => {
     expect(update?.completion).toBeUndefined();
   });
 
+  it("can post external CLI assistant messages before completion in answer-updates mode", () => {
+    const binding: SlackThreadBinding = {
+      key: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      cwd: "C:/repo",
+      codexThreadId: "thread-1",
+      activeTurnId: "external-cli:thread-1",
+      status: "active",
+      notifyMode: "answer-updates",
+      lastFinalAnswer: "old answer",
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:00:00.000Z",
+      createdBy: "U1"
+    };
+
+    const update = slackBridgeTestInternals.externalCliSessionSyncUpdate(binding, {
+      id: "thread-1",
+      cwd: "C:/repo",
+      status: "active",
+      turnActive: true,
+      createdAt: "2026-07-07T00:00:00.000Z",
+      updatedAt: "2026-07-07T00:01:00.000Z",
+      path: "C:/Users/example/.codex/sessions/thread-1.jsonl",
+      lastPrompt: "run from cli",
+      lastFinalAnswer: "in-progress answer update",
+      commands: [{ timestamp: "2026-07-07T00:00:30.000Z", prompt: "run from cli" }]
+    });
+
+    expect(update?.completion).toMatchObject({
+      slackKey: "C1:1.0",
+      channelId: "C1",
+      threadTs: "1.0",
+      codexThreadId: "thread-1",
+      turnId: "external-cli:thread-1",
+      status: "active",
+      finalAnswer: "in-progress answer update"
+    });
+  });
+
   it("does not duplicate Slack-managed CLI completion messages", () => {
     const binding: SlackThreadBinding = {
       key: "C1:1.0",

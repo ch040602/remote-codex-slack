@@ -120,7 +120,7 @@ Slash command settings:
 Command: /codex
 Request URL: any valid placeholder URL if Slack requires one
 Short description: Control local Codex
-Usage hint: s | bind-session | recent | send-policy immediate|confirm|pending | ? | $ | pwd | ls | cd <path> | send <prompt>
+Usage hint: s | bind-session | recent | send-policy immediate|confirm|pending | notify-mode final-only|answer-updates | ? | $ | pwd | ls | cd <path> | send <prompt>
 ```
 
 Socket Mode delivers slash commands to the local bridge. Slack still asks for a Request URL in some screens, but it is not used as the runtime transport.
@@ -391,6 +391,8 @@ Pending and send policy:
 /codex send-policy immediate
 /codex send-policy confirm
 /codex send-policy pending
+/codex notify-mode final-only
+/codex notify-mode answer-updates
 /codex pending
 /codex pending-edit 1 <new prompt>
 /codex pending-run 1

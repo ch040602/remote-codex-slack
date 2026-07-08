@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveUserPath } from "../config.js";
 import type { BridgeConfig, SkillDef } from "../config.js";
 import type { PathResolver, ResolvedWorkspace } from "../core/pathResolver.js";
-import type { LanguageCode, PendingCommand, SendPolicy, SessionCommandRecord, Store, SlackThreadBinding } from "../core/store.js";
+import type { LanguageCode, NotifyMode, PendingCommand, SendPolicy, SessionCommandRecord, Store, SlackThreadBinding } from "../core/store.js";
 import type { SkillRegistry } from "../core/skills.js";
 import { listCodexCliSessions, type CodexCliSessionCommand, type CodexCliSessionSummary } from "../codex/sessionIndex.js";
 import type { CodexRuntime, TurnCompletedEvent } from "../codex/controllerTypes.js";
@@ -50,8 +50,9 @@ interface AssistActionValue {
   token?: string;
 }
 
-const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session", "send-mode", "send-policy"]);
+const DIRECT_RUN_COMMANDS = new Set(["help", "projects", "skills", "pwd", "ls", "recent", "sessions", "active", "history", "pending", "status", "bind-session", "session", "send-mode", "send-policy", "notify-mode"]);
 const DEFAULT_LINKED_SEND_POLICY: SendPolicy = "immediate";
+const DEFAULT_NOTIFY_MODE: NotifyMode = "final-only";
 const RECENT_SESSIONS_CACHE_MS = 30_000;
 const EXTERNAL_CLI_SYNC_MS = 10_000;
 const MAX_SKILL_PICKER_OPTIONS = 50;
@@ -249,6 +250,9 @@ export class SlackBridge {
         case "send-policy":
           await this.handleSendPolicy(ctx, parsed);
           return;
+        case "notify-mode":
+          await this.handleNotifyMode(ctx, parsed);
+          return;
         case "session":
         case "s":
           await this.handleSessionMenu(ctx);
@@ -355,6 +359,7 @@ export class SlackBridge {
         title: existing?.title,
         sendMode: existing?.sendMode,
         sendPolicy: existing?.sendPolicy,
+        notifyMode: existing?.notifyMode,
         language: existing?.language,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
@@ -431,10 +436,11 @@ export class SlackBridge {
     const binding = this.currentThreadBinding(ctx) ?? this.store.findLatestForChannel(ctx.channelId);
     const sendMode = this.sendModeForContext(ctx);
     const sendPolicy = this.sendPolicyForContext(ctx);
-    const text = renderSessionQuickText(workspace, binding, language, sendMode, sendPolicy);
+    const notifyMode = this.notifyModeForContext(ctx);
+    const text = renderSessionQuickText(workspace, binding, language, sendMode, sendPolicy, notifyMode);
     await this.replyWithBlocks(ctx, {
       text,
-      blocks: sessionQuickActionBlocks(language, text, sendMode, sendPolicy)
+      blocks: sessionQuickActionBlocks(language, text, sendMode, sendPolicy, notifyMode)
     });
   }
 
@@ -464,6 +470,12 @@ export class SlackBridge {
       case "send-policy-pending":
         await this.setSendPolicy(ctx, "pending");
         return;
+      case "notify-mode-final-only":
+        await this.setNotifyMode(ctx, "final-only");
+        return;
+      case "notify-mode-answer-updates":
+        await this.setNotifyMode(ctx, "answer-updates");
+        return;
       case "status":
         await this.handleStatus(ctx);
         return;
@@ -492,7 +504,8 @@ export class SlackBridge {
       title: "New session"
     });
     const sendMode = this.sendModeForContext(ctx);
-    const linkedBinding = this.store.updateThread(binding.key, { sendMode, sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+    const notifyMode = this.notifyModeForContext(ctx);
+    const linkedBinding = this.store.updateThread(binding.key, { sendMode, sendPolicy: DEFAULT_LINKED_SEND_POLICY, notifyMode });
     this.invalidateRecentSessions();
     await this.postThreadWithBlocks(ctx.client, threadContext.channelId, threadContext.threadTs, {
       text: [
@@ -530,6 +543,15 @@ export class SlackBridge {
     await this.setSendPolicy(ctx, requested);
   }
 
+  private async handleNotifyMode(ctx: CommandContext, cmd: ParsedCommand) {
+    const requested = normalizeNotifyMode(cmd.args[0]);
+    if (!requested) {
+      await this.reply(ctx, renderNotifyModeStatus(this.notifyModeForContext(ctx), this.currentLanguage(ctx)));
+      return;
+    }
+    await this.setNotifyMode(ctx, requested);
+  }
+
   private async setSendMode(ctx: CommandContext, enabled: boolean) {
     const workspace = this.currentWorkspace(ctx);
     const now = new Date().toISOString();
@@ -547,6 +569,7 @@ export class SlackBridge {
           projectName: workspace.projectName,
           sendMode: enabled,
           sendPolicy: this.sendPolicyForContext(ctx),
+          notifyMode: this.notifyModeForContext(ctx),
           status: "idle",
           createdAt: now,
           updatedAt: now,
@@ -584,6 +607,7 @@ export class SlackBridge {
           projectName: workspace.projectName,
           sendMode: this.sendModeForContext(ctx),
           sendPolicy: policy,
+          notifyMode: this.notifyModeForContext(ctx),
           status: "idle",
           createdAt: now,
           updatedAt: now,
@@ -602,6 +626,44 @@ export class SlackBridge {
       });
     }
     await this.reply(ctx, renderSendPolicyStatus(policy, this.currentLanguage(ctx)));
+  }
+
+  private async setNotifyMode(ctx: CommandContext, mode: NotifyMode) {
+    const workspace = this.currentWorkspace(ctx);
+    const now = new Date().toISOString();
+    if (ctx.threadTs) {
+      const key = this.store.threadKey(ctx.channelId, ctx.threadTs);
+      const existing = this.store.getThreadBinding(key);
+      if (existing) {
+        this.store.updateThread(key, { notifyMode: mode });
+      } else {
+        this.store.upsertThreadBinding({
+          key,
+          channelId: ctx.channelId,
+          threadTs: ctx.threadTs,
+          cwd: workspace.cwd,
+          projectName: workspace.projectName,
+          sendMode: this.sendModeForContext(ctx),
+          sendPolicy: this.sendPolicyForContext(ctx),
+          notifyMode: mode,
+          status: "idle",
+          createdAt: now,
+          updatedAt: now,
+          createdBy: ctx.userId
+        });
+      }
+    } else {
+      this.store.setChannelBinding({
+        channelId: ctx.channelId,
+        cwd: workspace.cwd,
+        projectName: workspace.projectName,
+        notifyMode: mode,
+        language: this.currentLanguage(ctx),
+        updatedAt: now,
+        updatedBy: ctx.userId
+      });
+    }
+    await this.reply(ctx, renderNotifyModeStatus(mode, this.currentLanguage(ctx)));
   }
 
   private async handleUnbindSession(ctx: CommandContext) {
@@ -630,7 +692,8 @@ export class SlackBridge {
         binding?.codexThreadId ? `codexThreadId: ${codeInline(binding.codexThreadId)}` : undefined,
         binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
         `sendMode: ${codeInline(this.sendModeForContext(ctx) ? "on" : "off")}`,
-        `sendPolicy: ${codeInline(this.sendPolicyForContext(ctx))}`
+        `sendPolicy: ${codeInline(this.sendPolicyForContext(ctx))}`,
+        `notifyMode: ${codeInline(this.notifyModeForContext(ctx))}`
       ]
         .filter(Boolean)
         .join("\n")
@@ -688,7 +751,7 @@ export class SlackBridge {
       createdBy: ctx.userId,
       title: prompt.slice(0, 80)
     });
-    const linkedBinding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+    const linkedBinding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY, notifyMode: this.notifyModeForContext(ctx) });
     this.invalidateRecentSessions();
     const { turnId, referencedSkills } = await this.codex.startTurn(linkedBinding, prompt);
     this.recordSessionCommand(ctx, linkedBinding, "new", prompt);
@@ -741,7 +804,7 @@ export class SlackBridge {
         createdBy: ctx.userId,
         title: prompt.slice(0, 80)
       });
-      binding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+      binding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY, notifyMode: this.notifyModeForContext(ctx) });
       this.invalidateRecentSessions();
       createdBinding = true;
     }
@@ -804,7 +867,7 @@ export class SlackBridge {
       projectName: workspace.projectName,
       createdBy: ctx.userId
     });
-    binding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+    binding = this.store.updateThread(binding.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY, notifyMode: this.notifyModeForContext(ctx) });
     this.invalidateRecentSessions();
 
     const prompt = cmd.args.slice(1).join(" ").trim();
@@ -904,7 +967,7 @@ export class SlackBridge {
     });
     this.invalidateRecentSessions();
     if (binding.key.startsWith("codex-cli:") || !binding.channelId) {
-      resumed = this.store.updateThread(resumed.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY });
+      resumed = this.store.updateThread(resumed.key, { sendPolicy: DEFAULT_LINKED_SEND_POLICY, notifyMode: this.notifyModeForContext(ctx) });
       this.invalidateRecentSessions();
     }
     const { turnId, referencedSkills } = await this.codex.startTurn(resumed, prompt);
@@ -1104,6 +1167,7 @@ export class SlackBridge {
       `cwd: ${codeInline(binding.cwd)}`,
       `sendMode: ${codeInline(this.sendModeForContext(ctx) ? "on" : "off")}`,
       `sendPolicy: ${codeInline(this.sendPolicyForContext(ctx))}`,
+      `notifyMode: ${codeInline(this.notifyModeForContext(ctx))}`,
       binding.activeTurnId ? `activeTurnId: ${codeInline(binding.activeTurnId)}` : undefined,
       binding.lastPrompt ? `lastPrompt: ${binding.lastPrompt.slice(0, 300)}` : undefined,
       binding.lastFinalAnswer ? `lastFinalAnswer:\n${binding.lastFinalAnswer.slice(0, 1000)}` : undefined
@@ -1343,6 +1407,7 @@ export class SlackBridge {
           status: "idle",
           sendMode: this.sendModeForContext(ctx),
           sendPolicy: this.sendPolicyForContext(ctx),
+          notifyMode: this.notifyModeForContext(ctx),
           language: requested,
           createdAt: now,
           updatedAt: now,
@@ -1403,6 +1468,15 @@ export class SlackBridge {
     }
     const storedChannel = this.store.getChannelBinding(ctx.channelId);
     return storedChannel?.sendPolicy ?? "immediate";
+  }
+
+  private notifyModeForContext(ctx: CommandContext): NotifyMode {
+    if (ctx.threadTs) {
+      const binding = this.store.getThreadBinding(this.store.threadKey(ctx.channelId, ctx.threadTs));
+      if (binding?.notifyMode) return binding.notifyMode;
+    }
+    const storedChannel = this.store.getChannelBinding(ctx.channelId);
+    return storedChannel?.notifyMode ?? DEFAULT_NOTIFY_MODE;
   }
 
   private workspaceFromCommandOrContext(ctx: CommandContext, cmd: ParsedCommand): ResolvedWorkspace {
@@ -1564,7 +1638,8 @@ export class SlackBridge {
         if (!binding.codexThreadId) continue;
         const session = byId.get(binding.codexThreadId.toLowerCase());
         if (!session) continue;
-        const update = externalCliSessionSyncUpdate(binding, session);
+        const channelNotifyMode = this.store.getChannelBinding(binding.channelId)?.notifyMode;
+        const update = externalCliSessionSyncUpdate(binding.notifyMode || !channelNotifyMode ? binding : { ...binding, notifyMode: channelNotifyMode }, session);
         if (!update) continue;
         this.store.updateThread(binding.key, update.patch);
         this.invalidateRecentSessions();
@@ -1605,6 +1680,7 @@ export class SlackBridge {
       cwd: session.cwd,
       projectName: session.projectName,
       sendPolicy: DEFAULT_LINKED_SEND_POLICY,
+      notifyMode: this.notifyModeForContext(ctx),
       language: this.currentLanguage(ctx),
       updatedAt: new Date().toISOString(),
       updatedBy: ctx.userId
@@ -1636,6 +1712,7 @@ export class SlackBridge {
         sessionCommands: session.sessionCommands,
         title: session.title,
         sendPolicy: DEFAULT_LINKED_SEND_POLICY,
+        notifyMode: this.notifyModeForContext(ctx),
         language: this.currentLanguage(ctx),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1668,6 +1745,7 @@ export class SlackBridge {
       title: session.title,
       sendMode: this.sendModeForContext(ctx),
       sendPolicy: DEFAULT_LINKED_SEND_POLICY,
+      notifyMode: this.notifyModeForContext(ctx),
       language: this.currentLanguage(ctx),
       createdAt: now,
       updatedAt: now,
@@ -1678,6 +1756,7 @@ export class SlackBridge {
       cwd: session.cwd,
       projectName: session.projectName,
       sendPolicy: DEFAULT_LINKED_SEND_POLICY,
+      notifyMode: this.notifyModeForContext(ctx),
       language: this.currentLanguage(ctx),
       updatedAt: now,
       updatedBy: ctx.userId
@@ -2366,7 +2445,7 @@ function renderRerunFullPreview(session: SlackThreadBinding, language: LanguageC
   ].join("\n");
 }
 
-function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode: boolean, sendPolicy: SendPolicy): any[] {
+function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode: boolean, sendPolicy: SendPolicy, notifyMode: NotifyMode): any[] {
   const labels = language === "ko"
     ? {
         newSameRepo: "새 세션",
@@ -2376,6 +2455,8 @@ function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode
         immediate: "즉시 실행",
         confirm: "버튼 확인",
         pending: "모두 대기",
+        finalOnly: "최종만 알림",
+        answerUpdates: "진행도 알림",
         status: "상태",
         recent: "최근 목록"
       }
@@ -2387,6 +2468,8 @@ function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode
         immediate: "Immediate",
         confirm: "Confirm",
         pending: "Pending",
+        finalOnly: "Final only",
+        answerUpdates: "Answer updates",
         status: "Status",
         recent: "Recent"
       };
@@ -2402,6 +2485,8 @@ function sessionQuickActionBlocks(language: LanguageCode, text: string, sendMode
         sessionActionButton(labels.immediate, "send-policy-immediate", sendPolicy === "immediate" ? "primary" : undefined),
         sessionActionButton(labels.confirm, "send-policy-confirm", sendPolicy === "confirm" ? "primary" : undefined),
         sessionActionButton(labels.pending, "send-policy-pending", sendPolicy === "pending" ? "primary" : undefined),
+        sessionActionButton(labels.finalOnly, "notify-mode-final-only", notifyMode === "final-only" ? "primary" : undefined),
+        sessionActionButton(labels.answerUpdates, "notify-mode-answer-updates", notifyMode === "answer-updates" ? "primary" : undefined),
         sessionActionButton(labels.status, "status"),
         sessionActionButton(labels.recent, "recent")
       ]
@@ -2419,7 +2504,7 @@ function sessionActionButton(label: string, command: string, style?: "primary" |
   };
 }
 
-function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThreadBinding | undefined, language: LanguageCode, sendMode: boolean, sendPolicy: SendPolicy): string {
+function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThreadBinding | undefined, language: LanguageCode, sendMode: boolean, sendPolicy: SendPolicy, notifyMode: NotifyMode): string {
   const lines = language === "ko"
     ? [
         "*빠른 세션 작업*",
@@ -2429,6 +2514,7 @@ function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThre
         binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
         `send mode: ${codeInline(sendMode ? "on" : "off")}`,
         `send policy: ${codeInline(sendPolicy)}`,
+        `notify mode: ${codeInline(notifyMode)}`,
         "",
         sendMode
           ? "`새 세션`은 같은 repo/cwd에 새 thread를 만들고 연결합니다. 일반 메시지는 Codex 입력으로 들어가고 send policy에 따라 처리됩니다."
@@ -2442,6 +2528,7 @@ function renderSessionQuickText(workspace: ResolvedWorkspace, binding: SlackThre
         binding?.status ? `status: ${codeInline(binding.status)}` : undefined,
         `send mode: ${codeInline(sendMode ? "on" : "off")}`,
         `send policy: ${codeInline(sendPolicy)}`,
+        `notify mode: ${codeInline(notifyMode)}`,
         "",
         sendMode
           ? "`New session` creates and links a new thread for the same repo/cwd. Normal messages are handled by the send policy."
@@ -2678,6 +2765,13 @@ function normalizeSendPolicy(value: string | undefined): SendPolicy | undefined 
   return undefined;
 }
 
+function normalizeNotifyMode(value: string | undefined): NotifyMode | undefined {
+  const normalized = (value ?? "status").trim().toLowerCase();
+  if (["final", "final-only", "complete", "completed", "done", "최종", "완료"].includes(normalized)) return "final-only";
+  if (["answer-updates", "updates", "progress", "all", "in-progress", "진행", "진행중"].includes(normalized)) return "answer-updates";
+  return undefined;
+}
+
 function renderSendModeStatus(enabled: boolean, language: LanguageCode): string {
   if (language === "ko") {
     return [
@@ -2719,6 +2813,29 @@ function renderSendPolicyStatus(policy: SendPolicy, language: LanguageCode): str
     `Send policy: ${codeInline(policy)}`,
     description[policy],
     "Change: `send-policy immediate` / `send-policy confirm` / `send-policy pending`"
+  ].join("\n");
+}
+
+function renderNotifyModeStatus(mode: NotifyMode, language: LanguageCode): string {
+  if (language === "ko") {
+    const description = {
+      "final-only": "기본값입니다. 외부 CLI 세션에서도 turn이 끝난 최종 답변만 채널에 알립니다.",
+      "answer-updates": "외부 CLI 세션의 진행 중 assistant 답변 업데이트도 채널에 알립니다."
+    } satisfies Record<NotifyMode, string>;
+    return [
+      `Notify mode: ${codeInline(mode)}`,
+      description[mode],
+      "변경: `notify-mode final-only` / `notify-mode answer-updates`"
+    ].join("\n");
+  }
+  const description = {
+    "final-only": "Default. Channel notifications are posted only for final answers, including externally updated CLI sessions.",
+    "answer-updates": "In-progress assistant answer updates from external CLI sessions are also posted to the channel."
+  } satisfies Record<NotifyMode, string>;
+  return [
+    `Notify mode: ${codeInline(mode)}`,
+    description[mode],
+    "Change: `notify-mode final-only` / `notify-mode answer-updates`"
   ].join("\n");
 }
 
@@ -2800,7 +2917,8 @@ function externalCliSessionSyncUpdate(binding: SlackThreadBinding, session: Code
     if (binding.status !== "active") patch.status = "active";
     if (binding.activeTurnId !== externalTurnId) patch.activeTurnId = externalTurnId;
     if (Object.keys(patch).length > 0) patch.updatedAt = session.updatedAt;
-    if (!hasNewFinalAnswer || session.turnActive) {
+    const suppressInProgressAnswer = session.turnActive && (binding.notifyMode ?? DEFAULT_NOTIFY_MODE) !== "answer-updates";
+    if (!hasNewFinalAnswer || suppressInProgressAnswer) {
       return Object.keys(patch).length > 0 ? { patch } : undefined;
     }
     return {
@@ -2869,6 +2987,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `send [-f] <prompt>`: send policy에 따라 현재 세션에 입력",
       "- `send-mode on|off|status`: 일반 대화 자동 입력 켜기/끄기",
       "- `send-policy immediate|confirm|pending`: 즉시 실행/버튼 확인/전체 대기열 모드",
+      "- `notify-mode final-only|answer-updates`: 최종 답변만 알림/진행 중 답변도 알림",
       "- `recent`: Slack/로컬 CLI 세션 목록",
       "- `resume <number|id|last>`: 최근 목록에서 번호/ID로 세션 연결",
       "- `bind-session [number|id|last]`: 현재 channel/thread를 세션에 연결",
@@ -2881,7 +3000,7 @@ function helpText(prefix: string, language: LanguageCode): string {
       "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: 대기 명령 관리",
       "- `language en|ko`: 안내 언어 변경",
       "",
-      "Send mode가 켜져 있을 때 일반 채널/스레드 메시지가 현재 세션 입력으로 들어갑니다. 기본 send policy는 `immediate`이고, `confirm` 또는 `pending`으로 바꿀 수 있습니다. `/`로 시작하는 입력은 Slack slash command로만 처리됩니다. Thread에서는 일반 reply로 Codex에 입력하고, `recent`, `history 2`, `pending` 같은 plain bot command도 사용할 수 있습니다."
+      "Send mode가 켜져 있을 때 일반 채널/스레드 메시지가 현재 세션 입력으로 들어갑니다. 기본 send policy는 `immediate`이고, `confirm` 또는 `pending`으로 바꿀 수 있습니다. 기본 notify mode는 `final-only`라 완료된 최종 답변만 채널에 알립니다. `/`로 시작하는 입력은 Slack slash command로만 처리됩니다. Thread에서는 일반 reply로 Codex에 입력하고, `recent`, `history 2`, `pending` 같은 plain bot command도 사용할 수 있습니다."
     ].join("\n");
   }
 
@@ -2895,6 +3014,7 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `send [-f] <prompt>`: continue current session by send policy",
     "- `send-mode on|off|status`: toggle normal-chat auto input",
     "- `send-policy immediate|confirm|pending`: immediate, button-confirmed, or queued execution",
+    "- `notify-mode final-only|answer-updates`: final-answer-only notifications or in-progress answer updates",
     "- `recent`: Slack/local CLI sessions",
     "- `resume <number|id|last>`: bind a session from the recent list",
     "- `bind-session [number|id|last]`: bind this channel/thread to a session",
@@ -2907,6 +3027,6 @@ function helpText(prefix: string, language: LanguageCode): string {
     "- `pending`, `pending-edit`, `pending-run`, `pending-drop`: manage queued commands",
     "- `language en|ko`: change help language",
     "",
-    "Normal channel/thread messages become current-session input when send mode is on. The default send policy is `immediate`; switch to `confirm` or `pending` when you want more review. Messages starting with `/` stay Slack slash commands. In linked threads, use normal replies for Codex input and plain bot commands such as `recent`, `history 2`, or `pending`."
+    "Normal channel/thread messages become current-session input when send mode is on. The default send policy is `immediate`; switch to `confirm` or `pending` when you want more review. The default notify mode is `final-only`, so channel notifications are posted only for completed final answers. Messages starting with `/` stay Slack slash commands. In linked threads, use normal replies for Codex input and plain bot commands such as `recent`, `history 2`, or `pending`."
   ].join("\n");
 }

@@ -10,6 +10,7 @@ describe("command suggestions", () => {
     expect(commandSuggestions("s").map((suggestion) => suggestion.entry.name)).toContain("session");
     expect(commandSuggestions("send-m").map((suggestion) => suggestion.entry.name)).toContain("send-mode");
     expect(commandSuggestions("send-p").map((suggestion) => suggestion.entry.name)).toContain("send-policy");
+    expect(commandSuggestions("notify-m").map((suggestion) => suggestion.entry.name)).toContain("notify-mode");
     expect(commandSuggestions("unbind-s").map((suggestion) => suggestion.entry.name)).toContain("unbind-session");
     expect(commandSuggestions("bind-c").map((suggestion) => suggestion.entry.name)).not.toContain(["bind", "channel"].join("-"));
   });
@@ -41,5 +42,10 @@ describe("command suggestions", () => {
   it("documents send policy modes", () => {
     const usage = commandSuggestions("send-policy")[0]?.entry.usage;
     expect(usage).toBe("send-policy immediate|confirm|pending|status");
+  });
+
+  it("documents notify modes", () => {
+    const usage = commandSuggestions("notify-mode")[0]?.entry.usage;
+    expect(usage).toBe("notify-mode final-only|answer-updates|status");
   });
 });

@@ -68,7 +68,7 @@ describe("Store pending commands", () => {
     expect(store.getThreadBindingByCodexThread("019f20cf-7b8a-7c52-b037-d90afad6fd44")).toBeUndefined();
   });
 
-  it("persists send mode and send policy on channel and thread bindings", () => {
+  it("persists send mode, send policy, and notify mode on channel and thread bindings", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-slack-store-send-mode-"));
     const store = new Store(path.join(dir, "state.json"));
     store.load();
@@ -78,6 +78,7 @@ describe("Store pending commands", () => {
       cwd: "C:/repo",
       sendMode: false,
       sendPolicy: "pending",
+      notifyMode: "final-only",
       updatedAt: "2026-07-02T00:00:00.000Z",
       updatedBy: "U1"
     });
@@ -88,6 +89,7 @@ describe("Store pending commands", () => {
       cwd: "C:/repo",
       sendMode: true,
       sendPolicy: "confirm",
+      notifyMode: "answer-updates",
       status: "idle",
       createdAt: "2026-07-02T00:00:00.000Z",
       updatedAt: "2026-07-02T00:00:00.000Z",
@@ -98,7 +100,9 @@ describe("Store pending commands", () => {
     reloaded.load();
     expect(reloaded.getChannelBinding("C1")?.sendMode).toBe(false);
     expect(reloaded.getChannelBinding("C1")?.sendPolicy).toBe("pending");
+    expect(reloaded.getChannelBinding("C1")?.notifyMode).toBe("final-only");
     expect(reloaded.getThreadBinding("C1:1.0")?.sendMode).toBe(true);
     expect(reloaded.getThreadBinding("C1:1.0")?.sendPolicy).toBe("confirm");
+    expect(reloaded.getThreadBinding("C1:1.0")?.notifyMode).toBe("answer-updates");
   });
 });

@@ -31,6 +31,7 @@ export const COMMAND_HELP: CommandHelpEntry[] = [
   { name: "send", usage: "send [-f] <prompt>", en: "Send, confirm, or queue input to the current session by send policy.", ko: "send policy에 따라 현재 세션 입력을 전송, 확인, 또는 대기열에 넣습니다." },
   { name: "send-mode", usage: "send-mode on|off|status", en: "Toggle whether normal chat messages are accepted as Codex input.", ko: "일반 채팅 메시지를 Codex 입력으로 받을지 켜고 끕니다." },
   { name: "send-policy", usage: "send-policy immediate|confirm|pending|status", en: "Choose immediate, button-confirmed, or queued execution.", ko: "즉시 실행, 버튼 확인, 전체 대기열 모드 중 선택합니다." },
+  { name: "notify-mode", usage: "notify-mode final-only|answer-updates|status", en: "Choose whether Slack channel notifications are final-only or include in-progress answer updates.", ko: "Slack 채널 알림을 최종 답변만 받을지, 진행 중 답변 업데이트까지 받을지 선택합니다." },
   { name: "steer", usage: "steer <prompt>", en: "Add input to an active in-flight turn.", ko: "실행 중인 turn에 추가 입력을 보냅니다." },
   { name: "resume", usage: "resume <number|codexThreadId|last> [prompt]", en: "Bind/resume a recent or existing Codex session.", ko: "번호 또는 ID로 기존 Codex 세션을 연결하거나 이어갑니다." },
   { name: "recent", usage: "recent [--channel name] [number]", en: "Show Slack and local Codex CLI sessions.", ko: "Slack 및 로컬 Codex CLI 최근 세션을 봅니다.", aliases: ["sessions"] },
